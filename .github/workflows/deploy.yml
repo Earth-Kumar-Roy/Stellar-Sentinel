@@ -1,0 +1,113 @@
+name: Deploy Web & Agent
+
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - "web/**"
+      - "agent/**"
+      - ".github/workflows/deploy.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # -------------------------------------------------------------
+  # Job 1: Deploy ML Risk & Settlement Keeper to Render
+  # -------------------------------------------------------------
+  deploy-agent:
+    name: Deploy Agent to Render
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Check Agent File Changes
+        id: check_agent_changes
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            agent_files:
+              - 'agent/**'
+              - '.github/workflows/deploy.yml'
+
+      - name: Trigger Render Deploy Hook
+        if: steps.check_agent_changes.outputs.agent_files == 'true' || github.event_name == 'workflow_dispatch'
+        env:
+          RENDER_DEPLOY_HOOK_URL: ${{ secrets.RENDER_DEPLOY_HOOK_URL }}
+        run: |
+          if [ -z "$RENDER_DEPLOY_HOOK_URL" ]; then
+            echo "::notice ::RENDER_DEPLOY_HOOK_URL secret not configured. Skipping agent deployment."
+          else
+            echo "Dispatching Render deployment webhook for commit ${{ github.sha }}..."
+            # Append ref query param to guarantee Render deploys the exact Git commit
+            HOOK_URL="$RENDER_DEPLOY_HOOK_URL"
+            if [[ "$HOOK_URL" == *"?"* ]]; then
+              DEPLOY_ENDPOINT="${HOOK_URL}&ref=${{ github.sha }}"
+            else
+              DEPLOY_ENDPOINT="${HOOK_URL}?ref=${{ github.sha }}"
+            fi
+            RESPONSE_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$DEPLOY_ENDPOINT")
+            if [ "$RESPONSE_CODE" -ge 200 ] && [ "$RESPONSE_CODE" -lt 300 ]; then
+              echo "Render deploy successfully queued (HTTP $RESPONSE_CODE)."
+            else
+              echo "::error ::Render deploy failed with HTTP status $RESPONSE_CODE."
+              exit 1
+            fi
+          fi
+
+  # -------------------------------------------------------------
+  # Job 2: Build & Deploy Frontend to Vercel
+  # -------------------------------------------------------------
+  deploy-web:
+    name: Deploy Web to Vercel
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Check Web File Changes
+        id: check_web_changes
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            web_files:
+              - 'web/**'
+              - '.github/workflows/deploy.yml'
+
+      - name: Setup Node.js Environment
+        if: steps.check_web_changes.outputs.web_files == 'true' || github.event_name == 'workflow_dispatch'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: "npm"
+          cache-dependency-path: "web/package-lock.json"
+
+      - name: Install Vercel CLI
+        if: steps.check_web_changes.outputs.web_files == 'true' || github.event_name == 'workflow_dispatch'
+        run: npm install --global vercel@latest
+
+      - name: Pull Vercel Environment Information
+        if: steps.check_web_changes.outputs.web_files == 'true' || github.event_name == 'workflow_dispatch'
+        working-directory: ./web
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+        run: vercel pull --yes --environment=production --token=$VERCEL_TOKEN
+
+      - name: Build Web Application Artifacts
+        if: steps.check_web_changes.outputs.web_files == 'true' || github.event_name == 'workflow_dispatch'
+        working-directory: ./web
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+        run: vercel build --prod --token=$VERCEL_TOKEN
+
+      - name: Deploy Prebuilt Artifacts to Vercel
+        if: steps.check_web_changes.outputs.web_files == 'true' || github.event_name == 'workflow_dispatch'
+        working-directory: ./web
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+        run: vercel deploy --prebuilt --prod --token=$VERCEL_TOKEN
