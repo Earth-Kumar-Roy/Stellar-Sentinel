@@ -1,0 +1,70 @@
+name: Test Soroban Contracts
+
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - "contracts/**"
+      - ".github/workflows/test-contracts.yml"
+  pull_request:
+    branches: [main, master]
+    paths:
+      - "contracts/**"
+      - ".github/workflows/test-contracts.yml"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  contract-ci:
+    name: Build & Test Contracts
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust Toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+          targets: wasm32v1-none, wasm32-unknown-unknown
+          components: clippy, rustfmt
+
+      - name: Cache Cargo Dependencies & Build Artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            contracts/target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('contracts/**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Install Stellar CLI
+        run: |
+          cargo install --locked stellar-cli --features opt
+
+      - name: Format Check
+        run: |
+          cd contracts
+          cargo fmt --all -- --check
+
+      - name: Clippy Linter Check
+        run: |
+          cd contracts
+          cargo clippy --all-targets -- -D warnings
+
+      - name: Run Contract Unit & Simulation Tests
+        run: |
+          cd contracts
+          cargo test -- --nocapture
+
+      - name: Compile Optimized WASM Artifact
+        run: |
+          cd contracts
+          stellar contract build
