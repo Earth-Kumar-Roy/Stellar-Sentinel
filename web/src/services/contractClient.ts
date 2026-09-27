@@ -1,0 +1,462 @@
+import {
+  Contract,
+  Address,
+  scValToNative,
+  rpc,
+  TransactionBuilder,
+  BASE_FEE,
+  Keypair,
+  xdr,
+} from '@stellar/stellar-sdk';
+import { signTransaction } from '@stellar/freighter-api';
+import { STELLAR_CONFIG } from '../config/constants';
+import { supabase } from '../config/supabase';
+
+// Dedicated Keeper Bot Credentials from Environment (no hardcoded secret)
+const BOT_SECRET_KEY: string = (import.meta as any).env?.VITE_BOT_SECRET_KEY || '';
+const botKeypair: Keypair = BOT_SECRET_KEY 
+  ? Keypair.fromSecret(BOT_SECRET_KEY) 
+  : Keypair.random();
+
+// Custom Epoch: Jan 1, 2024 00:00:00 UTC
+const PROJECT_EPOCH_OFFSET = 1704067200;
+
+export interface CreateIntentParams {
+  caller: string;
+  recipient: string;
+  cosigner1?: string | null;
+  cosigner2?: string | null;
+  guardian?: string | null;
+  asset?: string;
+  amountStroops: bigint;
+  purposeNote: string;
+  observationDelaySeconds?: number;
+  orgName?: string;
+  senderName?: string;
+  senderRole?: string;
+}
+
+export class ContractClient {
+  private static server = new rpc.Server(STELLAR_CONFIG.RPC_URL, {
+    allowHttp: STELLAR_CONFIG.RPC_URL.startsWith('http://'),
+  });
+
+  public static encodeDbIntentId(onChainId: number): number {
+    const nowSec = Math.floor(Date.now() / 1000);
+    const deltaT = Math.max(nowSec - PROJECT_EPOCH_OFFSET, 1);
+    return deltaT * 100000 + (onChainId % 100000);
+  }
+
+  public static decodeOnChainId(dbIntentId: number): number {
+    if (dbIntentId < 100000) return dbIntentId;
+    return dbIntentId % 100000;
+  }
+
+  public static decodeTimestamp(dbIntentId: number): number {
+    if (dbIntentId < 100000) return Math.floor(Date.now() / 1000);
+    const deltaT = Math.floor(dbIntentId / 100000);
+    return deltaT + PROJECT_EPOCH_OFFSET;
+  }
+
+  private static async waitForConfirmation(hash: string): Promise<any> {
+    const maxAttempts = 30;
+
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+
+      try {
+        const rpcRes = await fetch(STELLAR_CONFIG.RPC_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            jsonrpc: '2.0',
+            id: attempt,
+            method: 'getTransaction',
+            params: { hash },
+          }),
+        });
+
+        const rpcData = await rpcRes.json();
+        const txStatus = rpcData?.result?.status;
+
+        if (txStatus === 'SUCCESS') {
+          return rpcData.result;
+        }
+
+        if (txStatus === 'FAILED') {
+          throw new Error(`Transaction reverted on-chain (RPC status: FAILED).`);
+        }
+      } catch (err: any) {
+        if (err.message?.includes('reverted on-chain')) {
+          throw err;
+        }
+      }
+    }
+
+    throw new Error(`Transaction submission timed out awaiting consensus. Hash: ${hash}`);
+  }
+
+  private static async submitTx(tx: any, callerAddress: string): Promise<{ hash: string; txResult: any }> {
+    const simRes = await this.server.simulateTransaction(tx);
+
+    if (rpc.Api.isSimulationError(simRes)) {
+      throw new Error(`Simulation failed: ${simRes.error}`);
+    }
+
+    const assembledTx = rpc.assembleTransaction(tx, simRes).build();
+
+    const signedResult: any = await signTransaction(assembledTx.toXDR(), {
+      networkPassphrase: STELLAR_CONFIG.NETWORK_PASSPHRASE,
+      address: callerAddress,
+    });
+
+    if (typeof signedResult === 'object' && signedResult !== null && 'error' in signedResult) {
+      throw new Error(String(signedResult.error));
+    }
+
+    const rawSignedXdr: string =
+      typeof signedResult === 'string' ? signedResult : signedResult?.signedTxXdr;
+
+    if (!rawSignedXdr) {
+      throw new Error('Freighter did not return a valid signed transaction envelope.');
+    }
+
+    const finalTx = TransactionBuilder.fromXDR(
+      rawSignedXdr,
+      STELLAR_CONFIG.NETWORK_PASSPHRASE
+    );
+
+    const sendRes = await this.server.sendTransaction(finalTx);
+
+    if (sendRes.status === 'ERROR') {
+      throw new Error(`RPC submission error: ${JSON.stringify(sendRes)}`);
+    }
+
+    const txResult = await this.waitForConfirmation(sendRes.hash);
+
+    return { hash: sendRes.hash, txResult };
+  }
+
+  static async computePurposeHash(note: string): Promise<Uint8Array> {
+    const encoder = new TextEncoder();
+    const data = encoder.encode(note.trim() || 'General Organizational Transfer');
+    const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+    return new Uint8Array(hashBuffer);
+  }
+
+  static async createIntent(params: CreateIntentParams): Promise<{ intentId: number; onChainId: number; txHash: string }> {
+    const {
+      caller,
+      recipient,
+      cosigner1,
+      cosigner2,
+      guardian,
+      amountStroops,
+      purposeNote,
+      observationDelaySeconds = 180,
+      orgName = 'none',
+      senderName = 'none',
+      senderRole = 'none',
+    } = params;
+
+    const assetAddress = params.asset || STELLAR_CONFIG.NATIVE_TOKEN;
+    const account = await this.server.getAccount(caller);
+    const contract = new Contract(STELLAR_CONFIG.CONTRACT_ID);
+    const purposeHashBytes = await this.computePurposeHash(purposeNote);
+
+    const callerScVal = new Address(caller).toScVal();
+    const recipientScVal = new Address(recipient).toScVal();
+    const assetScVal = new Address(assetAddress).toScVal();
+
+    const cosignersScVals: xdr.ScVal[] = [];
+    if (cosigner1 && cosigner1.trim() !== '') {
+      cosignersScVals.push(new Address(cosigner1.trim()).toScVal());
+    }
+    if (cosigner2 && cosigner2.trim() !== '') {
+      cosignersScVals.push(new Address(cosigner2.trim()).toScVal());
+    }
+    const cosignersVecScVal = xdr.ScVal.scvVec(cosignersScVals);
+
+    const guardianScVals: xdr.ScVal[] = [];
+    if (guardian && guardian.trim() !== '') {
+      guardianScVals.push(new Address(guardian.trim()).toScVal());
+    }
+    const guardianVecScVal = xdr.ScVal.scvVec(guardianScVals);
+
+    const amountScVal = xdr.ScVal.scvI64(xdr.Int64.fromString(amountStroops.toString()));
+    const purposeScVal = xdr.ScVal.scvBytes(purposeHashBytes);
+    const delayScVal = xdr.ScVal.scvU64(xdr.Uint64.fromString(observationDelaySeconds.toString()));
+
+    const callOp = contract.call(
+      'create_intent',
+      callerScVal,
+      recipientScVal,
+      cosignersVecScVal,
+      guardianVecScVal,
+      assetScVal,
+      amountScVal,
+      purposeScVal,
+      delayScVal
+    );
+
+    const tx = new TransactionBuilder(account, {
+      fee: (parseInt(BASE_FEE, 10) * 10).toString(),
+      networkPassphrase: STELLAR_CONFIG.NETWORK_PASSPHRASE,
+    })
+      .addOperation(callOp)
+      .setTimeout(180)
+      .build();
+
+    const { hash, txResult } = await this.submitTx(tx, caller);
+
+    let rawOnChainId = 0;
+    try {
+      if (txResult.returnValue) {
+        rawOnChainId = Number(scValToNative(txResult.returnValue));
+      } else if (txResult.resultMetaXdr) {
+        const meta: any = xdr.TransactionMeta.fromXDR(txResult.resultMetaXdr, 'base64');
+        const v3 = typeof meta.v3 === 'function' ? meta.v3() : (typeof meta.value === 'function' ? meta.value() : meta);
+
+        if (v3 && typeof v3.sorobanMeta === 'function' && v3.sorobanMeta()) {
+          const retVal = v3.sorobanMeta()?.returnValue();
+          if (retVal) {
+            rawOnChainId = Number(scValToNative(retVal));
+          }
+        }
+      }
+    } catch {
+      // Fallback
+    }
+
+    if (!rawOnChainId || rawOnChainId <= 0) {
+      rawOnChainId = await this.getTotalIntents();
+    }
+
+    // Compute mathematically unique DB intent ID using the snowflake epoch formula
+    const dbUniqueIntentId = this.encodeDbIntentId(rawOnChainId);
+    const descriptionWithMeta = `[DELAY:${observationDelaySeconds}] ${purposeNote.trim()}`;
+
+    const { error: dbError } = await supabase.from('transactions_testnet').insert([
+      {
+        intent_id: dbUniqueIntentId,
+        from_wallet: caller,
+        to_wallet: recipient,
+        org_name: orgName,
+        sender_name: senderName,
+        sender_role: senderRole,
+        cosigner_1_name: cosigner1 && cosigner1.trim() !== '' ? cosigner1.trim() : 'none',
+        cosigner_2_name: cosigner2 && cosigner2.trim() !== '' ? cosigner2.trim() : 'none',
+        total_amount: Number((Number(amountStroops) / 10_000_000).toFixed(7)),
+        asset_address: assetAddress,
+        status: 'observing',
+        description: descriptionWithMeta,
+        note: purposeNote,
+        tx_hash: hash,
+      },
+    ]);
+
+    if (dbError) {
+      console.error('[Supabase Insert Error]:', dbError);
+    }
+
+    return { intentId: dbUniqueIntentId, onChainId: rawOnChainId, txHash: hash };
+  } 
+
+  static async approveIntent(caller: string, rawIntentId: number, isGuardian = false): Promise<string> {
+    const onChainId = this.decodeOnChainId(rawIntentId);
+    const account = await this.server.getAccount(caller);
+    const contract = new Contract(STELLAR_CONFIG.CONTRACT_ID);
+    const functionName = isGuardian ? 'approve_guardian' : 'approve_intent';
+
+    const callOp = contract.call(
+      functionName,
+      new Address(caller).toScVal(),
+      xdr.ScVal.scvU64(xdr.Uint64.fromString(onChainId.toString()))
+    );
+
+    const tx = new TransactionBuilder(account, {
+      fee: BASE_FEE,
+      networkPassphrase: STELLAR_CONFIG.NETWORK_PASSPHRASE,
+    })
+      .addOperation(callOp)
+      .setTimeout(180)
+      .build();
+
+    const { hash } = await this.submitTx(tx, caller);
+
+    // Retrieve previous note to preserve ML score/notes while embedding the signer address
+    const { data: existing } = await supabase
+      .from('transactions_testnet')
+      .select('note')
+      .eq('intent_id', rawIntentId)
+      .maybeSingle();
+
+    const priorNote = existing?.note || '';
+    const signedTag = `[SIGNED:${caller}]`;
+    const updatedNote = priorNote.includes(signedTag)
+      ? priorNote
+      : `${priorNote} ${signedTag}`.trim();
+
+    await supabase
+      .from('transactions_testnet')
+      .update({ 
+        status: 'observing',
+        note: updatedNote
+      })
+      .eq('intent_id', rawIntentId);
+
+    return hash;
+  }
+
+  static async cancelIntent(caller: string, rawIntentId: number): Promise<string> {
+    const onChainId = this.decodeOnChainId(rawIntentId);
+    const account = await this.server.getAccount(caller);
+    const contract = new Contract(STELLAR_CONFIG.CONTRACT_ID);
+
+    const callOp = contract.call(
+      'cancel_intent',
+      new Address(caller).toScVal(),
+      xdr.ScVal.scvU64(xdr.Uint64.fromString(onChainId.toString()))
+    );
+
+    const tx = new TransactionBuilder(account, {
+      fee: BASE_FEE,
+      networkPassphrase: STELLAR_CONFIG.NETWORK_PASSPHRASE,
+    })
+      .addOperation(callOp)
+      .setTimeout(180)
+      .build();
+
+    const { hash } = await this.submitTx(tx, caller);
+
+    await supabase
+      .from('transactions_testnet')
+      .update({ status: 'cancelled' })
+      .eq('intent_id', rawIntentId);
+
+    return hash;
+  }
+
+  static async executeIntent(caller: string, rawIntentId: number): Promise<string> {
+    const onChainId = this.decodeOnChainId(rawIntentId);
+    const account = await this.server.getAccount(caller);
+    const contract = new Contract(STELLAR_CONFIG.CONTRACT_ID);
+
+    const callOp = contract.call(
+      'execute_intent',
+      new Address(caller).toScVal(),
+      xdr.ScVal.scvU64(xdr.Uint64.fromString(onChainId.toString()))
+    );
+
+    const tx = new TransactionBuilder(account, {
+      fee: BASE_FEE,
+      networkPassphrase: STELLAR_CONFIG.NETWORK_PASSPHRASE,
+    })
+      .addOperation(callOp)
+      .setTimeout(180)
+      .build();
+
+    const { hash } = await this.submitTx(tx, caller);
+
+    await supabase
+      .from('transactions_testnet')
+      .update({ status: 'executed', tx_hash: hash })
+      .eq('intent_id', rawIntentId);
+
+    return hash;
+  }
+
+  static async getTotalIntents(): Promise<number> {
+    try {
+      const contract = new Contract(STELLAR_CONFIG.CONTRACT_ID);
+      const botAccount = await this.server.getAccount(botKeypair.publicKey());
+      const tx = new TransactionBuilder(botAccount, {
+        fee: BASE_FEE,
+        networkPassphrase: STELLAR_CONFIG.NETWORK_PASSPHRASE,
+      })
+        .addOperation(contract.call('get_total_intents'))
+        .setTimeout(60)
+        .build();
+
+      const simRes: any = await this.server.simulateTransaction(tx);
+      if (simRes.result?.retval) {
+        return Number(scValToNative(simRes.result.retval));
+      }
+      return 0;
+    } catch {
+      return 0;
+    }
+  }
+
+  static async resolveChallenge(caller: string, rawIntentId: number, dismiss: boolean): Promise<string> {
+    const onChainId = this.decodeOnChainId(rawIntentId);
+    const account = await this.server.getAccount(caller);
+    const contract = new Contract(STELLAR_CONFIG.CONTRACT_ID);
+
+    const functionName = dismiss ? 'resolve_challenge' : 'cancel_intent';
+
+    const callOp = contract.call(
+      functionName,
+      new Address(caller).toScVal(),
+      xdr.ScVal.scvU64(xdr.Uint64.fromString(onChainId.toString()))
+    );
+
+    const tx = new TransactionBuilder(account, {
+      fee: BASE_FEE,
+      networkPassphrase: STELLAR_CONFIG.NETWORK_PASSPHRASE,
+    })
+      .addOperation(callOp)
+      .setTimeout(180)
+      .build();
+
+    const { hash } = await this.submitTx(tx, caller);
+    return hash;
+  }
+
+  static async settleWithBot(rawIntentId: number): Promise<{ success: boolean; txHash?: string }> {
+    try {
+      const onChainId = this.decodeOnChainId(rawIntentId);
+      const contract = new Contract(STELLAR_CONFIG.CONTRACT_ID);
+      const botAccount = await this.server.getAccount(botKeypair.publicKey());
+
+      const callOp = contract.call(
+        'execute_intent',
+        new Address(botKeypair.publicKey()).toScVal(),
+        xdr.ScVal.scvU64(xdr.Uint64.fromString(onChainId.toString()))
+      );
+
+      const tx = new TransactionBuilder(botAccount, {
+        fee: BASE_FEE,
+        networkPassphrase: STELLAR_CONFIG.NETWORK_PASSPHRASE,
+      })
+        .addOperation(callOp)
+        .setTimeout(60)
+        .build();
+
+      const simRes = await this.server.simulateTransaction(tx);
+      if (rpc.Api.isSimulationError(simRes)) {
+        throw new Error(`Simulation failed: ${simRes.error}`);
+      }
+
+      const assembledTx = rpc.assembleTransaction(tx, simRes).build();
+      assembledTx.sign(botKeypair);
+
+      const sendRes = await this.server.sendTransaction(assembledTx);
+      if (sendRes.status === 'ERROR') {
+        throw new Error(`Bot submission error: ${JSON.stringify(sendRes)}`);
+      }
+
+      await this.waitForConfirmation(sendRes.hash);
+
+      await supabase
+        .from('transactions_testnet')
+        .update({ status: 'executed', tx_hash: sendRes.hash })
+        .eq('intent_id', rawIntentId);
+
+      return { success: true, txHash: sendRes.hash };
+    } catch (err: any) {
+      console.warn(`[Bot Settlement Notice] Intent #${rawIntentId}:`, err.message);
+      return { success: false };
+    }
+  }
+}
