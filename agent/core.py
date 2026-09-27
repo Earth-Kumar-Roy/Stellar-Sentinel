@@ -29,42 +29,46 @@ class AgentSettings(BaseSettings):
         description="Horizon API endpoint for account state"
     )
     CONTRACT_ID: str = Field(
-        default="CCGM3AULBNW5DVVA32CXYSBW2WQBJG3UXHBRIK63K4CM24KGNTTLWLUZ",
+        ...,
         description="Deployed SentinelTreasury contract address"
     )
 
-    # ML Agent Signer & Identity
+    # ML Agent Signer & Keeper Identity (Mandatory from Environment)
     AGENT_SECRET_KEY: str = Field(
-        default="SAGF5CEIAWYTS3ZFRWR6H6K66QBXKNEC2F5P6ECZD5IYEJIWXBVV4ECO",
+        ...,
         description="Secret key (S...) of the authorized ML detector account"
     )
     BOT_SECRET_KEY: str = Field(
-        default="SAGF5CEIAWYTS3ZFRWR6H6K66QBXKNEC2F5P6ECZD5IYEJIWXBVV4ECO",
+        ...,
         description="Funded keeper bot secret key for autonomous timelock execution"
     )
     MIN_CHALLENGE_BOND_STROOPS: int = Field(
-        default=50_0000000,
-        description="Anti-griefing bond amount in stroops (50 XLM)"
+        default=500_000_000,
+        description="Anti-griefing bond amount in stroops (50 XLM, 7 decimals)"
     )
 
-    # Database & Storage
+    # Database & Storage (Mandatory from Environment)
     SUPABASE_URL: str = Field(..., description="Supabase project URL")
     SUPABASE_SERVICE_ROLE_KEY: str = Field(
         ..., 
         description="Supabase Service Role Key for backend ingestion"
     )
 
-    # Google Apps Script Webhook
+    # Google Apps Script Webhook (Mandatory from Environment)
     GAS_WEBHOOK_URL: str = Field(
-        default="https://script.google.com/macros/s/AKfycbzo1DoSre_FzqHux_aBb7yFjD7o_Xu_IYUlKq93TjH-MwcoK78ntKiW8fEnGEItPLM/exec",
-        description="Google Apps Script endpoint for alerts and OTPs"
+        ...,
+        description="Google Apps Script endpoint for alerts and invoices"
     )
 
-    # Polling & Evaluation Tunables
+    # Daemon Execution Controls & Crank Security
     POLL_INTERVAL_SECONDS: int = Field(default=5)
     RISK_CHALLENGE_THRESHOLD: float = Field(
         default=75.0,
         description="Composite score threshold (0-100) above which intent is challenged"
+    )
+    CRANK_SECRET: str = Field(
+        default="",
+        description="Optional shared secret header to protect /crank endpoint"
     )
 
 
