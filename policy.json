@@ -1,0 +1,11 @@
+{
+  "daily_limit": "500000000000",
+  "fast_path_limit": "1000000000",
+  "guardian_quorum": 1,
+  "intent_ttl": 86400,
+  "max_per_tx": "100000000000",
+  "min_challenge_bond": "500000000",
+  "observation_delay": 3600,
+  "policy_version": 1,
+  "quorum": 1
+}
