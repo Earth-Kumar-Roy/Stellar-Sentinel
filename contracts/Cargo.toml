@@ -1,0 +1,34 @@
+[workspace]
+resolver = "2"
+members = [
+    "sentinel_treasury",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+authors = ["Stellar Sentinel Team"]
+license = "Apache-2.0"
+
+[profile.release]
+opt-level = "z"
+overflow-checks = true
+debug = 0
+strip = "symbols"
+debug-assertions = false
+panic = "abort"
+codegen-units = 1
+lto = true
+
+[profile.release-with-logs]
+inherits = "release"
+debug-assertions = true
+
+[profile.test]
+opt-level = 0
+debug = 1
+codegen-units = 1
+
+# Force Cargo to replace any v3.0.0 ed25519-dalek with 2.1.1
+[patch.crates-io]
+ed25519-dalek = { git = "https://github.com/dalek-cryptography/curve25519-dalek", tag = "ed25519-2.1.1" }
