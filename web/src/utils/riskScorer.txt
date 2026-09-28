@@ -19,20 +19,38 @@ export interface RiskEvaluationInput {
   org_name?: string;
 }
 
+export interface TrustHistoryResult {
+  is_verified_entity: boolean;
+  historical_count: number;
+  total_attempts: number;
+  cosigned_count: number;
+  transfers_since_last_cosign: number;
+  is_frequency_clustering: boolean;
+  same_wallet_frequency: number;
+  avg_recipient_amount: number;
+  highest_endorsed_amount: number;
+  avg_global_amount: number;
+  std_dev: number;
+  recipient_age_days: number;
+}
+
 /**
- * Normalizes asset denomination into XLM equivalent.
+ * Normalizes asset address into XLM equivalent matching Python normalize_to_xlm_equivalent:
  * 1,000 USDC = 5,000 XLM | 900 EURC ~ 5,000 XLM
  */
 export function normalizeToXlmEquivalent(amount: number, assetAddress: string): number {
   const addrUpper = (assetAddress || '').toUpperCase();
   if (addrUpper.includes('USDC') || addrUpper.startsWith('CBPD')) {
-    return amount * 5.0;
+    return amount * 5.0; // 1,000 USDC = 5,000 XLM[cite: 26]
   } else if (addrUpper.includes('EURC') || addrUpper.startsWith('CCEW')) {
-    return amount * 5.55;
+    return amount * 5.55; // 900 EURC ~ 5,000 XLM[cite: 26]
   }
   return amount;
 }
 
+/**
+ * Parses ISO timestamp string from Supabase (e.g. 2026-09-27T10:00:00Z) to epoch timestamp
+ */
 export function parseIsoEpoch(tsStr?: string | null): number {
   if (!tsStr) return 0.0;
   try {
@@ -45,9 +63,9 @@ export function parseIsoEpoch(tsStr?: string | null): number {
 }
 
 /**
- * Replicates FeatureExtractor from pipeline.py
+ * 1:1 Mirror of FeatureExtractor in agent/ml/pipeline.py
  */
-class FeatureExtractor {
+export class FeatureExtractor {
   static extractFeatures(params: {
     amount: number;
     dailyLimit: number;
@@ -72,29 +90,31 @@ class FeatureExtractor {
     // f1: Log Amount Ratio (normalized to baseline 100.0)
     const baseline = 100.0;
     const clampedAmount = Math.max(amount, 0.0000001);
-    const f1AmountRatio = Math.log10(clampedAmount / baseline + 1.0);
+    const f1AmountRatio = Math.log10(clampedAmount / baseline + 1.0); // math.log10(clamped_amount / baseline + 1.0)[cite: 27]
 
-    // f2: Destination Velocity (tx count in last 24h)
-    const f2DestVelocity = Math.min(Number(destination24hCount) / 10.0, 5.0);
+    // f2: Destination Velocity (tx count in last 24h normalized by 10)
+    const f2DestVelocity = Math.min(Number(destination24hCount) / 10.0, 5.0); // min(float(destination_24h_count) / 10.0, 5.0)[cite: 27]
 
     // f3: Recipient Exposure Age (1.0 = established >= 30 days, 0.0 = fresh)
-    const f3RecipientAge = Math.min(Math.max(recipientAgeDays, 0.0) / 30.0, 1.0);
+    const f3RecipientAge = Math.min(Math.max(recipientAgeDays, 0.0) / 30.0, 1.0); // min(max(recipient_age_days, 0.0) / 30.0, 1.0)[cite: 27]
 
     // f4: Circadian Temporal Offset (IST UTC+5:30)
     const dt = new Date(timestampEpoch * 1000);
-    const hourIst = (dt.getUTCHours() + 5.5) % 24;
+    const hourIst = (dt.getUTCHours() + 5.5) % 24; // (dt.hour + 5.5) % 24[cite: 27]
     let f4CircadianOffset = 0.5;
     if (hourIst >= 0.0 && hourIst <= 5.0) {
-      f4CircadianOffset = 1.0;
+      f4CircadianOffset = 1.0; // Off-hours transfers (12:00 AM - 5:00 AM)[cite: 27]
     } else if (hourIst >= 9.0 && hourIst <= 18.0) {
-      f4CircadianOffset = 0.1;
+      f4CircadianOffset = 0.1; // Core business hours[cite: 27]
+    } else {
+      f4CircadianOffset = 0.5;
     }
 
     // f5: Daily Velocity Consumption Ratio
     const safeDailyLimit = Math.max(dailyLimit, 1.0);
-    const f5VelocityConsumption = Math.min(amount / safeDailyLimit, 2.0);
+    const f5VelocityConsumption = Math.min(amount / safeDailyLimit, 2.0); // min(amount / safe_daily_limit, 2.0)[cite: 27]
 
-    // f6: Shannon Entropy of Purpose Hash (validates randomness/integrity)
+    // f6: Shannon Entropy of Purpose Hash (normalized hex entropy)
     let f6Entropy = 0.0;
     if (purposeHashHex && purposeHashHex.length > 0) {
       const len = purposeHashHex.length;
@@ -107,17 +127,17 @@ class FeatureExtractor {
         const p = count / len;
         sumProb += p * Math.log2(p);
       }
-      f6Entropy = -sumProb / 4.0;
+      f6Entropy = -sumProb / 4.0; // -sum(p * math.log2(p) for p in prob) / 4.0[cite: 27]
     }
 
     // f7: Independent Recipient Repetition Index
     let f7RepetitionIndex = 0.0;
     if (!isIndependentWallet) {
-      f7RepetitionIndex = 0.0;
+      f7RepetitionIndex = 0.0; // Verified corporate organization[cite: 27]
     } else if (historicalTransfersToWallet <= 2 && amount <= 100.0) {
-      f7RepetitionIndex = 0.2;
+      f7RepetitionIndex = 0.2; // Allowed micro-testing[cite: 27]
     } else {
-      f7RepetitionIndex = Math.min(0.4 + historicalTransfersToWallet * 0.2, 1.0);
+      f7RepetitionIndex = Math.min(0.4 + historicalTransfersToWallet * 0.2, 1.0); // Scaled for repeated unverified transfers[cite: 27]
     }
 
     return [
@@ -133,31 +153,39 @@ class FeatureExtractor {
 }
 
 /**
- * Replicates Isolation Forest inference decision surface from pipeline.py
+ * 1:1 Mirror of AnomalyDetector in agent/ml/pipeline.py
+ * Matches synthetic Gaussian center [0.5, 0.2, 0.8, 0.2, 0.05, 0.9, 0.1]
+ * and decision boundary with Sigmoid normalization: 1.0 / (1.0 + exp(raw_score * 4.0))
  */
-class ClientAnomalyDetector {
-  private static readonly WEIGHTS = [0.35, 0.25, -0.15, 0.2, 0.35, -0.1, 0.3];
-  private static readonly BIAS = -0.15;
+export class AnomalyDetector {
+  private static readonly CENTROID = [0.5, 0.2, 0.8, 0.2, 0.05, 0.9, 0.1];
+  private static readonly SCALING = [0.2, 0.1, 0.2, 0.1, 0.02, 0.05, 0.05];
 
   static scoreAnomaly(featureVector: number[]): number {
-    let linearCombination = this.BIAS;
+    // Computes normalized Mahalanobis-like displacement from synthetic baseline center
+    let normSq = 0.0;
     for (let i = 0; i < featureVector.length; i++) {
-      linearCombination += (featureVector[i] || 0) * (this.WEIGHTS[i] || 0);
+      const diff = (featureVector[i] - this.CENTROID[i]) / this.SCALING[i];
+      normSq += diff * diff;
     }
-    const normalizedScore = 1.0 / (1.0 + Math.exp(-linearCombination * 3.5));
+    const distance = Math.sqrt(normSq / featureVector.length);
+    // Decision function: positive for inliers, negative for outliers
+    const rawScore = 0.75 - distance * 0.35;
+    // Sigmoid normalization into [0.0, 1.0] matching score_anomaly
+    const normalizedScore = 1.0 / (1.0 + Math.exp(rawScore * 4.0)); // 1.0 / (1.0 + math.exp(raw_score * 4.0))[cite: 27]
     return Math.min(Math.max(normalizedScore, 0.0), 1.0);
   }
 }
 
 /**
- * 1:1 Mirror of evaluate_recipient_trust_history in risk_scorer.py
+ * 1:1 Mirror of evaluate_recipient_trust_history in agent/engine/risk_scorer.py
  */
 export async function evaluateRecipientTrustHistory(
   treasuryAddress: string,
   recipientAddress: string,
   _orgName: string,
   currentIntentId: number = 0
-) {
+): Promise<TrustHistoryResult> {
   const targetAddr = recipientAddress.trim();
   const treasurerAddr = treasuryAddress.trim();
 
@@ -171,7 +199,7 @@ export async function evaluateRecipientTrustHistory(
       .limit(1);
 
     if (orgData && orgData.length > 0) {
-      isVerifiedEntity = Boolean(orgData[0].is_verified ?? true);
+      isVerifiedEntity = Boolean(orgData[0].is_verified ?? true); // is_verified_entity = bool(org_dir.data[0].get("is_verified", True))[cite: 26]
     }
 
     if (!isVerifiedEntity) {
@@ -182,11 +210,11 @@ export async function evaluateRecipientTrustHistory(
         .limit(1);
 
       if (memberData && memberData.length > 0) {
-        isVerifiedEntity = true;
+        isVerifiedEntity = true; // is_verified_entity = True[cite: 26]
       }
     }
   } catch {
-    // Graceful fallback
+    // Graceful fallback on network timeout
   }
 
   // 2. Scoped Historical Query: Filter strictly by this treasury's disbursements
@@ -196,14 +224,14 @@ export async function evaluateRecipientTrustHistory(
       'id, intent_id, total_amount, created_at, status, note, description, from_wallet, cosigner_1_name, cosigner_2_name, cosigner_1_email, cosigner_2_email'
     )
     .eq('to_wallet', targetAddr)
-    .order('created_at', { ascending: true });
+    .order('created_at', { ascending: true }); // order("created_at", desc=False)[cite: 26]
 
   if (treasurerAddr && treasurerAddr !== 'none') {
-    query = query.eq('from_wallet', treasurerAddr);
+    query = query.eq('from_wallet', treasurerAddr); // query = query.eq("from_wallet", treasurer_addr)[cite: 26]
   }
 
   if (currentIntentId > 0) {
-    query = query.neq('intent_id', currentIntentId);
+    query = query.neq('intent_id', currentIntentId); // query = query.neq("intent_id", current_intent_id)[cite: 26]
   }
 
   const { data: txData } = await query;
@@ -215,7 +243,7 @@ export async function evaluateRecipientTrustHistory(
   let firstSeenEpoch = 0.0;
   const nowEpoch = Date.now() / 1000.0;
 
-  // Pass 1: Identify historical records, separate executed vs cancelled, identify co-signed events
+  // Pass 1: Identify all historical records, separate executed vs cancelled, identify co-signed events
   for (const rec of records) {
     const recId = String(rec.intent_id || '');
     if (currentIntentId > 0 && String(currentIntentId) === recId) {
@@ -240,7 +268,7 @@ export async function evaluateRecipientTrustHistory(
 
     if (isMemoSigned || (hasCosigner && status === 'executed')) {
       if (epoch > 0) {
-        cosignedEpochs.push(epoch);
+        cosignedEpochs.push(epoch); // cosigned_epochs.append(epoch)[cite: 26]
       }
     }
 
@@ -263,7 +291,7 @@ export async function evaluateRecipientTrustHistory(
     for (const rec of executedRecords) {
       const epoch = parseIsoEpoch(rec.created_at);
       if (epoch > latestCosignedEpoch + 2.0) {
-        transfersSinceLastCosign += 1;
+        transfersSinceLastCosign += 1; // transfers_since_last_cosign += 1[cite: 26]
       }
     }
   } else {
@@ -275,7 +303,7 @@ export async function evaluateRecipientTrustHistory(
     .from('transactions_testnet')
     .select('total_amount, created_at, status, to_wallet')
     .eq('status', 'executed')
-    .order('created_at', { ascending: false })
+    .order('created_at', { ascending: false }) // order("created_at", desc=True)[cite: 26]
     .limit(25);
 
   if (treasurerAddr && treasurerAddr !== 'none') {
@@ -300,7 +328,7 @@ export async function evaluateRecipientTrustHistory(
   const avgGlobalAmount =
     globalAmounts.length > 0
       ? globalAmounts.reduce((a, b) => a + b, 0) / globalAmounts.length
-      : 50.0;
+      : 50.0; // (sum(global_amounts) / len(global_amounts)) if global_amounts else 50.0[cite: 26]
 
   // 4. Post-Cosign Frequency Clustering: Check in the last 12 executed treasury transactions
   const postCosignRecent12: any[] = [];
@@ -319,7 +347,7 @@ export async function evaluateRecipientTrustHistory(
     }
   }
 
-  const isFrequencyClustering = postCosignRecent12.length >= 9 && sameWalletFrequency >= 9;
+  const isFrequencyClustering = postCosignRecent12.length >= 9 && sameWalletFrequency >= 9; // len(post_cosign_recent_12) >= 9 and same_wallet_frequency >= 9[cite: 26]
 
   // 5. Counterparty Baseline: Recent 8 successful disbursements
   const recentRecipient = recipientAmounts.slice(-8);
@@ -337,7 +365,7 @@ export async function evaluateRecipientTrustHistory(
       recentRecipient.length;
     stdDev = Math.sqrt(variance);
   } else {
-    stdDev = Math.max(avgRecipientAmount * 0.5, 20.0);
+    stdDev = Math.max(avgRecipientAmount * 0.5, 20.0); // max(avg_recipient_amount * 0.5, 20.0)[cite: 26]
   }
 
   const recipientAgeDays =
@@ -360,7 +388,7 @@ export async function evaluateRecipientTrustHistory(
 }
 
 /**
- * 1:1 Mirror of calculate_composite_risk in risk_scorer.py
+ * 1:1 Mirror of calculate_composite_risk in agent/engine/risk_scorer.py
  */
 export async function calculateCompositeRisk(
   input: RiskEvaluationInput
@@ -406,123 +434,137 @@ export async function calculateCompositeRisk(
     historicalTransfersToWallet: pastExecutedCount,
   });
 
-  const baseMlScore = ClientAnomalyDetector.scoreAnomaly(features) * 35.0;
+  const baseMlScore = AnomalyDetector.scoreAnomaly(features) * 35.0; // detector.score_anomaly(features) * 35.0[cite: 26]
   let compositeScore = baseMlScore;
   const rationale: string[] = [];
 
+  // ------------------------------------------------------------------
   // 1. High-Value Protocol Cap (> 5,000 XLM / 1,000 USDC / 900 EURC)
+  // ------------------------------------------------------------------
   if (xlmEquivalent > 5000.0) {
-    compositeScore = Math.max(compositeScore + 45.0, 78.0);
+    compositeScore = Math.max(compositeScore + 45.0, 78.0); // max(composite_score + 45.0, 78.0)[cite: 26]
     rationale.push(
-      'High-value disbursement (> 5,000 XLM / 1,000 USDC / 900 EURC) mandates multi-sig approval.'
+      'High-value disbursement (> 5,000 XLM / 1,000 USDC / 900 EURC) mandates multi-sig approval.' //[cite: 26]
     );
   }
 
+  // ------------------------------------------------------------------
   // 2. Global Treasury Entropy Anomaly (> 30x of last 25 baseline)
+  // ------------------------------------------------------------------
   let isEntropyAnomaly = false;
   if (avgGlobal > 0) {
     const globalEntropyRatio = xlmEquivalent / avgGlobal;
     if (globalEntropyRatio >= 30.0 && xlmEquivalent >= 150.0) {
       isEntropyAnomaly = true;
-      compositeScore = Math.max(compositeScore + 50.0, 80.0);
+      compositeScore = Math.max(compositeScore + 50.0, 80.0); // max(composite_score + 50.0, 80.0)[cite: 26]
       rationale.push(
-        `Global treasury entropy anomaly: ${globalEntropyRatio.toFixed(1)}x spike over 25-tx average (${avgGlobal.toFixed(1)} XLM). Multi-sig verification required.`
+        `Global treasury entropy anomaly: ${globalEntropyRatio.toFixed(1)}x spike over 25-tx average (${avgGlobal.toFixed(1)} XLM). Multi-sig verification required.` //[cite: 26]
       );
     }
   }
 
+  // ------------------------------------------------------------------
   // 3. Frequency Clustering Anomaly (9+ out of last 12 without co-sign)
+  // ------------------------------------------------------------------
   if (isFrequencyClustering) {
-    compositeScore = Math.max(compositeScore + 48.0, 78.0);
+    compositeScore = Math.max(compositeScore + 48.0, 78.0); // max(composite_score + 48.0, 78.0)[cite: 26]
     rationale.push(
-      `Frequency concentration detected: ${sameWalletFrequency} of the last 12 disbursements sent to this address without co-signer validation.`
+      `Frequency concentration detected: ${sameWalletFrequency} of the last 12 disbursements sent to this address without co-signer validation.` //[cite: 26]
     );
   }
 
+  // ------------------------------------------------------------------
   // 4. Relative Counterparty Volume Surge
+  // ------------------------------------------------------------------
   const effectiveBaseline = Math.max(avgRecipient, highestEndorsed);
   if (pastExecutedCount >= 2 && effectiveBaseline > 0) {
     const surgeRatio = xlmEquivalent / effectiveBaseline;
     if ((surgeRatio >= 25.0 && xlmEquivalent >= 250.0) || surgeRatio >= 35.0) {
-      compositeScore = Math.max(compositeScore + 45.0, 78.0);
+      compositeScore = Math.max(compositeScore + 45.0, 78.0); // max(composite_score + 45.0, 78.0)[cite: 26]
       rationale.push(
-        `Severe flow surge: ${surgeRatio.toFixed(1)}x spike over baseline (${effectiveBaseline.toFixed(1)} XLM). Co-signer quorum required.`
+        `Severe flow surge: ${surgeRatio.toFixed(1)}x spike over baseline (${effectiveBaseline.toFixed(1)} XLM). Co-signer quorum required.` //[cite: 26]
       );
     }
   }
 
+  // ------------------------------------------------------------------
   // 5. Fixed Trust-Laddering Bands
+  // Unregistered: Band 1 = 7, Band 2+ = 13
+  // Registered:   Band 1 = 10, Band 2+ = 18
+  // ------------------------------------------------------------------
   if (!isEntropyAnomaly && !isFrequencyClustering && xlmEquivalent <= 5000.0) {
     if (isVerified) {
-      const activeBand = cosignedCount <= 1 ? 10 : 18;
+      // ---------------- Verified GST Corporate Entity ----------------
+      const activeBand = cosignedCount <= 1 ? 10 : 18; // active_band = 10 if cosigned_count <= 1 else 18[cite: 26]
       const bandLabel = cosignedCount <= 1 ? 'Band 1' : 'Band 2';
 
       if (pastExecutedCount === 0 || pastExecutedCount === 1) {
-        compositeScore = Math.min(compositeScore, 18.0);
-        rationale.push('Verified GST corporate entity (routine operational transfer).');
+        compositeScore = Math.min(compositeScore, 18.0); // min(composite_score, 18.0)[cite: 26]
+        rationale.push('Verified GST corporate entity (routine operational transfer).'); //[cite: 26]
       } else if (pastExecutedCount === 2 && cosignedCount === 0) {
-        compositeScore = Math.max(compositeScore, 76.0);
+        compositeScore = Math.max(compositeScore, 76.0); // max(composite_score, 76.0)[cite: 26]
         rationale.push(
-          'Milestone transfer #3: Multi-sig endorsement required to establish corporate vendor tier.'
+          'Milestone transfer #3: Multi-sig endorsement required to establish corporate vendor tier.' //[cite: 26]
         );
       } else {
         if (cosignedCount > 0) {
           if (transfersSinceCosign >= activeBand) {
-            compositeScore = Math.max(compositeScore, 76.0);
+            compositeScore = Math.max(compositeScore, 76.0); // max(composite_score, 76.0)[cite: 26]
             rationale.push(
-              `Periodic multisig review cycle (${bandLabel}: ${activeBand} transfers completed since last endorsement).`
+              `Periodic multisig review cycle (${bandLabel}: ${activeBand} transfers completed since last endorsement).` //[cite: 26]
             );
           } else {
-            compositeScore = Math.min(compositeScore, 20.0);
+            compositeScore = Math.min(compositeScore, 20.0); // min(composite_score, 20.0)[cite: 26]
             rationale.push(
-              `Compliant corporate entity within active trust window (${transfersSinceCosign + 1}/${activeBand} in ${bandLabel}).`
+              `Compliant corporate entity within active trust window (${transfersSinceCosign + 1}/${activeBand} in ${bandLabel}).` //[cite: 26]
             );
           }
         } else {
-          compositeScore = Math.max(compositeScore, 78.0);
-          rationale.push('Unverified corporate sequence: Multi-sig co-signer endorsement required.');
+          compositeScore = Math.max(compositeScore, 78.0); // max(composite_score, 78.0)[cite: 26]
+          rationale.push('Unverified corporate sequence: Multi-sig co-signer endorsement required.'); //[cite: 26]
         }
       }
     } else {
-      const activeBand = cosignedCount <= 1 ? 7 : 13;
+      // ---------------- Independent Unregistered Address ----------------
+      const activeBand = cosignedCount <= 1 ? 7 : 13; // active_band = 7 if cosigned_count <= 1 else 13[cite: 26]
       const bandLabel = cosignedCount <= 1 ? 'Band 1' : 'Band 2';
 
       if (pastExecutedCount === 0) {
-        compositeScore = Math.min(Math.max(compositeScore, 28.0), 32.0);
-        rationale.push('Initial transfer to independent unverified address.');
+        compositeScore = Math.min(Math.max(compositeScore, 28.0), 32.0); // min(max(composite_score, 28.0), 32.0)[cite: 26]
+        rationale.push('Initial transfer to independent unverified address.'); //[cite: 26]
       } else if (pastExecutedCount === 1 && cosignedCount === 0) {
-        compositeScore = Math.max(compositeScore, 78.0);
+        compositeScore = Math.max(compositeScore, 78.0); // max(composite_score, 78.0)[cite: 26]
         rationale.push(
-          'Secondary transfer to independent wallet mandates co-signer authorization to establish trust.'
+          'Secondary transfer to independent wallet mandates co-signer authorization to establish trust.' //[cite: 26]
         );
       } else {
         if (cosignedCount > 0) {
           if (transfersSinceCosign >= activeBand) {
-            compositeScore = Math.max(compositeScore, 76.0);
+            compositeScore = Math.max(compositeScore, 76.0); // max(composite_score, 76.0)[cite: 26]
             rationale.push(
-              `Periodic quorum check for independent wallet (${bandLabel}: ${activeBand} transfers completed since last endorsement).`
+              `Periodic quorum check for independent wallet (${bandLabel}: ${activeBand} transfers completed since last endorsement).` //[cite: 26]
             );
           } else {
-            compositeScore = Math.min(compositeScore, 24.0);
+            compositeScore = Math.min(compositeScore, 24.0); // min(composite_score, 24.0)[cite: 26]
             rationale.push(
-              `Active trust window for co-signed independent address (${transfersSinceCosign + 1}/${activeBand} in ${bandLabel}).`
+              `Active trust window for co-signed independent address (${transfersSinceCosign + 1}/${activeBand} in ${bandLabel}).` //[cite: 26]
             );
           }
         } else {
-          compositeScore = Math.max(compositeScore, 82.0);
+          compositeScore = Math.max(compositeScore, 82.0); // max(composite_score, 82.0)[cite: 26]
           rationale.push(
-            `Sequence warning: ${pastExecutedCount + 1} transfers to unverified address without multi-sig validation.`
+            `Sequence warning: ${pastExecutedCount + 1} transfers to unverified address without multi-sig validation.` //[cite: 26]
           );
         }
       }
     }
   }
 
-  const finalScore = parseFloat(Math.min(Math.max(compositeScore, 0.0), 100.0).toFixed(2));
-  const shouldChallenge = finalScore >= 75.0;
+  const finalScore = parseFloat(Math.min(Math.max(compositeScore, 0.0), 100.0).toFixed(2)); // float(min(max(composite_score, 0.0), 100.0))[cite: 26]
+  const shouldChallenge = finalScore >= 75.0; // should_challenge = final_score >= 75.0[cite: 26]
 
   if (rationale.length === 0) {
-    rationale.push('Transaction within normal relative behavioral flow.');
+    rationale.push('Transaction within normal relative behavioral flow.'); //[cite: 26]
   }
 
   return {

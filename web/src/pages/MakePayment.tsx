@@ -43,7 +43,7 @@ export const MakePayment: React.FC<MakePaymentProps> = ({
             DISBURSE TREASURY INTENT
           </h1>
           <p className="text-stellar-muted text-[11px] mt-1">
-            Publish on-chain payment parameters. Automatically bound to policy limits and observation windows[cite: 5].
+            Publish on-chain payment parameters. Automatically bound to policy limits and observation windows.
           </p>
         </div>
         <button
@@ -67,7 +67,7 @@ export const MakePayment: React.FC<MakePaymentProps> = ({
                 PAYMENT INTENT COMMITTED ON-CHAIN
               </h3>
               <p className="text-stellar-muted text-[11px]">
-                Intent ID <span className="text-stellar-yellow font-bold">#{lastReceipt.intentId}</span> registered on Soroban Testnet ({lastReceipt.symbol})[cite: 5].
+                Intent ID <span className="text-stellar-yellow font-bold">#{lastReceipt.intentId}</span> registered on Soroban Testnet ({lastReceipt.symbol}).
               </p>
             </div>
           </div>
@@ -89,7 +89,7 @@ export const MakePayment: React.FC<MakePaymentProps> = ({
 
           <div className="flex items-center gap-2 p-3 bg-stellar-yellow/5 border border-stellar-yellow/30 text-[11px] text-stellar-yellow">
             <ShieldCheck className="w-4 h-4 shrink-0" />
-            <span>The ML Sentinel Daemon is now monitoring this intent over the observation window[cite: 5].</span>
+            <span>The ML Sentinel Daemon is now monitoring this intent over the observation window.</span>
           </div>
 
           <div className="pt-2 flex justify-end gap-3">

@@ -10,9 +10,9 @@ detector = AnomalyDetector()
 def normalize_to_xlm_equivalent(amount: float, asset_address: str) -> float:
     addr_upper = (asset_address or "").upper()
     if "USDC" in addr_upper or addr_upper.startswith("CBPD"):
-        return amount * 5.0  # 1,000 USDC = 5,000 XLM[cite: 17]
+        return amount * 5.0  # 1,000 USDC = 5,000 XLM[cite: 15]
     elif "EURC" in addr_upper or addr_upper.startswith("CCEW"):
-        return amount * 5.55 # 900 EURC ~ 5,000 XLM[cite: 16, 17]
+        return amount * 5.55 # 900 EURC ~ 5,000 XLM[cite: 15]
     return amount
 
 
@@ -64,16 +64,16 @@ def evaluate_recipient_trust_history(
     # 2. Scoped Historical Query: Filter strictly by this treasury's disbursements
     query = supabase.table("transactions_testnet") \
         .select("id, intent_id, total_amount, created_at, status, note, description, from_wallet, cosigner_1_name, cosigner_2_name, cosigner_1_email, cosigner_2_email") \
-        .eq("to_wallet", target_addr) \
-        .order("created_at", desc=False)
+        .eq("to_wallet", target_addr)
 
-    if treasurer_addr and treasurer_addr != "none":
+    # Enforce multi-tenant isolation: only this treasurer's historical transfers
+    if treasurer_addr and treasurer_addr.lower() not in ["", "none", "null"]:
         query = query.eq("from_wallet", treasurer_addr)
 
     if current_intent_id > 0:
         query = query.neq("intent_id", current_intent_id)
 
-    tx_res = query.execute()
+    tx_res = query.order("created_at", desc=False).execute()
     records = tx_res.data or []
 
     executed_records = []
@@ -129,20 +129,18 @@ def evaluate_recipient_trust_history(
     else:
         transfers_since_last_cosign = len(executed_records)
 
-    # 3. Global Treasury Baseline: Last 25 executed transactions across the treasury
+    # 3. Global Treasury Baseline: Last 25 executed transactions across this company's treasury
     global_query = supabase.table("transactions_testnet") \
-        .select("total_amount, created_at, status, to_wallet") \
-        .eq("status", "executed") \
-        .order("created_at", desc=True) \
-        .limit(25)
+        .select("total_amount, created_at, status, to_wallet, from_wallet") \
+        .eq("status", "executed")
 
-    if treasurer_addr and treasurer_addr != "none":
+    if treasurer_addr and treasurer_addr.lower() not in ["", "none", "null"]:
         global_query = global_query.eq("from_wallet", treasurer_addr)
 
     if current_intent_id > 0:
         global_query = global_query.neq("intent_id", current_intent_id)
 
-    global_res = global_query.execute()
+    global_res = global_query.order("created_at", desc=True).limit(25).execute()
     global_records = global_res.data or []
     global_amounts = []
 

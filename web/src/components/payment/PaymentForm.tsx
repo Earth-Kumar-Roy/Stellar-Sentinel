@@ -11,7 +11,8 @@ import {
   Loader2, 
   CheckCircle2, 
   Mail, 
-  Database 
+  Database,
+  Cpu
 } from 'lucide-react';
 import { useRecipientOrg } from '../../hooks/useRecipientOrg';
 import { RecipientOrgCard } from './RecipientOrgCard';
@@ -19,7 +20,7 @@ import { ContractClient } from '../../services/contractClient';
 import { AppsScriptService } from '../../services/appsScript';
 import { SUPPORTED_TOKENS, STELLAR_CONFIG } from '../../config/constants';
 import { supabase } from '../../config/supabase';
-import { runPythonRiskEvaluation } from '../../services/pyodideScorer';
+import { runPythonRiskEvaluation, initPyodideEngine, isPyodideReady } from '../../services/pyodideScorer';
 import type { OrgMember } from '../../types';
 
 interface PaymentFormProps {
@@ -64,6 +65,10 @@ export const PaymentForm: React.FC<PaymentFormProps> = ({
   const [submitStage, setSubmitStage] = useState<string>('');
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
+  // Engine pre-warming state
+  const [isEngineReady, setIsEngineReady] = useState<boolean>(isPyodideReady());
+  const [engineWarmupStage, setEngineWarmupStage] = useState<string>('Initializing Python WASM Runtime...');
+
   const [mlScore, setMlScore] = useState<number | null>(null);
   const [mlRationale, setMlRationale] = useState<string | null>(null);
   const [isHighRisk, setIsHighRisk] = useState<boolean>(false);
@@ -80,11 +85,34 @@ export const PaymentForm: React.FC<PaymentFormProps> = ({
     setRecipient(initialRecipient || '');
   }, [initialRecipient]);
 
+  // Pre-warm the Python runtime immediately when the form mounts
+  useEffect(() => {
+    if (isPyodideReady()) {
+      setIsEngineReady(true);
+      return;
+    }
+
+    let isMounted = true;
+    initPyodideEngine((stage) => {
+      if (isMounted) setEngineWarmupStage(stage);
+    })
+      .then(() => {
+        if (isMounted) setIsEngineReady(true);
+      })
+      .catch((err) => {
+        console.warn('WASM engine background warmup warning:', err);
+      });
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
   const numericAmount = parseFloat(amount) || 0;
   const normalizedXlmAmount = useMemo(() => {
     const symbol = activeToken.symbol.toUpperCase();
-    if (symbol === 'USDC') return numericAmount * 5.0; // 1,000 USDC = 5,000 XLM
-    if (symbol === 'EURC') return numericAmount * 5.55; // 900 EURC ~ 5,000 XLM
+    if (symbol === 'USDC') return numericAmount * 5.0; // 1,000 USDC = 5,000 XLM[cite: 15]
+    if (symbol === 'EURC') return numericAmount * 5.55; // 900 EURC ~ 5,000 XLM[cite: 15]
     return numericAmount;
   }, [numericAmount, activeToken.symbol]);
 
@@ -188,6 +216,7 @@ export const PaymentForm: React.FC<PaymentFormProps> = ({
           setMlScore(data.risk_score);
           setMlRationale(data.rationale);
           setIsHighRisk(data.should_challenge || data.risk_score >= 75);
+          setIsEngineReady(true);
         }
       } catch (err) {
         console.warn('Pyodide inference execution error:', err);
@@ -399,6 +428,21 @@ export const PaymentForm: React.FC<PaymentFormProps> = ({
 
   return (
     <form onSubmit={handleSubmit} className="space-y-5 font-mono text-xs">
+      {/* Dynamic WASM Engine Initialization Status Banner */}
+      {!isEngineReady && (
+        <div className="bg-[#0B0E17] border border-stellar-yellow/40 p-3 card-polygon flex items-center justify-between animate-pulse">
+          <div className="flex items-center gap-2.5 text-stellar-yellow text-[11px]">
+            <Cpu className="w-4 h-4 animate-spin text-stellar-yellow shrink-0" />
+            <span>
+              <strong className="uppercase tracking-wider">Client ML Runtime:</strong> {engineWarmupStage}
+            </span>
+          </div>
+          <span className="text-[10px] text-stellar-muted font-sans hidden sm:inline">
+            One-time load (~30s). Subsequent checks are instant.
+          </span>
+        </div>
+      )}
+
       {errorMessage && (
         <div className="bg-red-950/40 border border-red-700/80 p-3.5 text-red-300 flex items-start gap-2.5 card-polygon animate-pulse">
           <AlertCircle className="w-4 h-4 shrink-0 mt-0.5 text-red-400" />
