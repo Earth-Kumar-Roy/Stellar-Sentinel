@@ -1,0 +1,535 @@
+import { supabase } from '../config/supabase';
+
+export interface RiskScorerOutput {
+  intent_id: number;
+  risk_score: number;
+  should_challenge: boolean;
+  rationale: string;
+  feature_vector: number[];
+}
+
+export interface RiskEvaluationInput {
+  intent_id?: number;
+  sender: string;
+  recipient: string;
+  amount: number;
+  asset_address?: string;
+  daily_limit?: number;
+  purpose_hash_hex?: string;
+  org_name?: string;
+}
+
+/**
+ * Normalizes asset denomination into XLM equivalent.
+ * 1,000 USDC = 5,000 XLM | 900 EURC ~ 5,000 XLM
+ */
+export function normalizeToXlmEquivalent(amount: number, assetAddress: string): number {
+  const addrUpper = (assetAddress || '').toUpperCase();
+  if (addrUpper.includes('USDC') || addrUpper.startsWith('CBPD')) {
+    return amount * 5.0;
+  } else if (addrUpper.includes('EURC') || addrUpper.startsWith('CCEW')) {
+    return amount * 5.55;
+  }
+  return amount;
+}
+
+export function parseIsoEpoch(tsStr?: string | null): number {
+  if (!tsStr) return 0.0;
+  try {
+    const cleaned = tsStr.endsWith('Z') ? tsStr : `${tsStr}+00:00`;
+    const dt = new Date(cleaned);
+    return isNaN(dt.getTime()) ? 0.0 : dt.getTime() / 1000.0;
+  } catch {
+    return 0.0;
+  }
+}
+
+/**
+ * Replicates FeatureExtractor from pipeline.py
+ */
+class FeatureExtractor {
+  static extractFeatures(params: {
+    amount: number;
+    dailyLimit: number;
+    destination24hCount: number;
+    recipientAgeDays: number;
+    timestampEpoch: number;
+    purposeHashHex: string;
+    isIndependentWallet: boolean;
+    historicalTransfersToWallet: number;
+  }): number[] {
+    const {
+      amount,
+      dailyLimit,
+      destination24hCount,
+      recipientAgeDays,
+      timestampEpoch,
+      purposeHashHex,
+      isIndependentWallet,
+      historicalTransfersToWallet,
+    } = params;
+
+    // f1: Log Amount Ratio (normalized to baseline 100.0)
+    const baseline = 100.0;
+    const clampedAmount = Math.max(amount, 0.0000001);
+    const f1AmountRatio = Math.log10(clampedAmount / baseline + 1.0);
+
+    // f2: Destination Velocity (tx count in last 24h)
+    const f2DestVelocity = Math.min(Number(destination24hCount) / 10.0, 5.0);
+
+    // f3: Recipient Exposure Age (1.0 = established >= 30 days, 0.0 = fresh)
+    const f3RecipientAge = Math.min(Math.max(recipientAgeDays, 0.0) / 30.0, 1.0);
+
+    // f4: Circadian Temporal Offset (IST UTC+5:30)
+    const dt = new Date(timestampEpoch * 1000);
+    const hourIst = (dt.getUTCHours() + 5.5) % 24;
+    let f4CircadianOffset = 0.5;
+    if (hourIst >= 0.0 && hourIst <= 5.0) {
+      f4CircadianOffset = 1.0;
+    } else if (hourIst >= 9.0 && hourIst <= 18.0) {
+      f4CircadianOffset = 0.1;
+    }
+
+    // f5: Daily Velocity Consumption Ratio
+    const safeDailyLimit = Math.max(dailyLimit, 1.0);
+    const f5VelocityConsumption = Math.min(amount / safeDailyLimit, 2.0);
+
+    // f6: Shannon Entropy of Purpose Hash (validates randomness/integrity)
+    let f6Entropy = 0.0;
+    if (purposeHashHex && purposeHashHex.length > 0) {
+      const len = purposeHashHex.length;
+      const charCounts = new Map<string, number>();
+      for (const char of purposeHashHex) {
+        charCounts.set(char, (charCounts.get(char) || 0) + 1);
+      }
+      let sumProb = 0.0;
+      for (const count of charCounts.values()) {
+        const p = count / len;
+        sumProb += p * Math.log2(p);
+      }
+      f6Entropy = -sumProb / 4.0;
+    }
+
+    // f7: Independent Recipient Repetition Index
+    let f7RepetitionIndex = 0.0;
+    if (!isIndependentWallet) {
+      f7RepetitionIndex = 0.0;
+    } else if (historicalTransfersToWallet <= 2 && amount <= 100.0) {
+      f7RepetitionIndex = 0.2;
+    } else {
+      f7RepetitionIndex = Math.min(0.4 + historicalTransfersToWallet * 0.2, 1.0);
+    }
+
+    return [
+      f1AmountRatio,
+      f2DestVelocity,
+      f3RecipientAge,
+      f4CircadianOffset,
+      f5VelocityConsumption,
+      f6Entropy,
+      f7RepetitionIndex,
+    ];
+  }
+}
+
+/**
+ * Replicates Isolation Forest inference decision surface from pipeline.py
+ */
+class ClientAnomalyDetector {
+  private static readonly WEIGHTS = [0.35, 0.25, -0.15, 0.2, 0.35, -0.1, 0.3];
+  private static readonly BIAS = -0.15;
+
+  static scoreAnomaly(featureVector: number[]): number {
+    let linearCombination = this.BIAS;
+    for (let i = 0; i < featureVector.length; i++) {
+      linearCombination += (featureVector[i] || 0) * (this.WEIGHTS[i] || 0);
+    }
+    const normalizedScore = 1.0 / (1.0 + Math.exp(-linearCombination * 3.5));
+    return Math.min(Math.max(normalizedScore, 0.0), 1.0);
+  }
+}
+
+/**
+ * 1:1 Mirror of evaluate_recipient_trust_history in risk_scorer.py
+ */
+export async function evaluateRecipientTrustHistory(
+  treasuryAddress: string,
+  recipientAddress: string,
+  _orgName: string,
+  currentIntentId: number = 0
+) {
+  const targetAddr = recipientAddress.trim();
+  const treasurerAddr = treasuryAddress.trim();
+
+  // 1. Corporate GST Registry Verification
+  let isVerifiedEntity = false;
+  try {
+    const { data: orgData } = await supabase
+      .from('organizations')
+      .select('id, is_verified')
+      .eq('wallet_address', targetAddr)
+      .limit(1);
+
+    if (orgData && orgData.length > 0) {
+      isVerifiedEntity = Boolean(orgData[0].is_verified ?? true);
+    }
+
+    if (!isVerifiedEntity) {
+      const { data: memberData } = await supabase
+        .from('organization_members')
+        .select('id, is_verified')
+        .eq('wallet_address', targetAddr)
+        .limit(1);
+
+      if (memberData && memberData.length > 0) {
+        isVerifiedEntity = true;
+      }
+    }
+  } catch {
+    // Graceful fallback
+  }
+
+  // 2. Scoped Historical Query: Filter strictly by this treasury's disbursements
+  let query = supabase
+    .from('transactions_testnet')
+    .select(
+      'id, intent_id, total_amount, created_at, status, note, description, from_wallet, cosigner_1_name, cosigner_2_name, cosigner_1_email, cosigner_2_email'
+    )
+    .eq('to_wallet', targetAddr)
+    .order('created_at', { ascending: true });
+
+  if (treasurerAddr && treasurerAddr !== 'none') {
+    query = query.eq('from_wallet', treasurerAddr);
+  }
+
+  if (currentIntentId > 0) {
+    query = query.neq('intent_id', currentIntentId);
+  }
+
+  const { data: txData } = await query;
+  const records = txData || [];
+
+  const executedRecords: any[] = [];
+  const cosignedEpochs: number[] = [];
+  const recipientAmounts: number[] = [];
+  let firstSeenEpoch = 0.0;
+  const nowEpoch = Date.now() / 1000.0;
+
+  // Pass 1: Identify historical records, separate executed vs cancelled, identify co-signed events
+  for (const rec of records) {
+    const recId = String(rec.intent_id || '');
+    if (currentIntentId > 0 && String(currentIntentId) === recId) {
+      continue;
+    }
+
+    const memo = `${rec.note || ''} ${rec.description || ''}`.toUpperCase();
+    const c1 = (rec.cosigner_1_name || '').trim().toLowerCase();
+    const c2 = (rec.cosigner_2_name || '').trim().toLowerCase();
+    const status = (rec.status || '').trim().toLowerCase();
+    const epoch = parseIsoEpoch(rec.created_at);
+
+    if (epoch > 0 && !firstSeenEpoch) {
+      firstSeenEpoch = epoch;
+    }
+
+    // Detect co-signer endorsements
+    const hasCosigner =
+      (c1 && !['none', 'null', 'undefined'].includes(c1)) ||
+      (c2 && !['none', 'null', 'undefined'].includes(c2));
+    const isMemoSigned = memo.includes('[SIGNED:') || memo.includes('CO-SIGNER APPROVED');
+
+    if (isMemoSigned || (hasCosigner && status === 'executed')) {
+      if (epoch > 0) {
+        cosignedEpochs.push(epoch);
+      }
+    }
+
+    // Only executed disbursements count toward baselines
+    if (status === 'executed') {
+      executedRecords.push(rec);
+      const val = parseFloat(rec.total_amount || 0);
+      if (val > 0) {
+        recipientAmounts.push(val);
+      }
+    }
+  }
+
+  const cosignedCount = cosignedEpochs.length;
+  const latestCosignedEpoch = cosignedEpochs.length > 0 ? Math.max(...cosignedEpochs) : 0.0;
+
+  // Pass 2: Count executed transfers occurred STRICTLY AFTER the latest co-signer endorsement
+  let transfersSinceLastCosign = 0;
+  if (latestCosignedEpoch > 0) {
+    for (const rec of executedRecords) {
+      const epoch = parseIsoEpoch(rec.created_at);
+      if (epoch > latestCosignedEpoch + 2.0) {
+        transfersSinceLastCosign += 1;
+      }
+    }
+  } else {
+    transfersSinceLastCosign = executedRecords.length;
+  }
+
+  // 3. Global Treasury Baseline: Last 25 executed transactions across the treasury
+  let globalQuery = supabase
+    .from('transactions_testnet')
+    .select('total_amount, created_at, status, to_wallet')
+    .eq('status', 'executed')
+    .order('created_at', { ascending: false })
+    .limit(25);
+
+  if (treasurerAddr && treasurerAddr !== 'none') {
+    globalQuery = globalQuery.eq('from_wallet', treasurerAddr);
+  }
+
+  if (currentIntentId > 0) {
+    globalQuery = globalQuery.neq('intent_id', currentIntentId);
+  }
+
+  const { data: globalData } = await globalQuery;
+  const globalRecords = globalData || [];
+  const globalAmounts: number[] = [];
+
+  for (const gItem of globalRecords) {
+    const v = parseFloat(gItem.total_amount || 0);
+    if (v > 0) {
+      globalAmounts.push(v);
+    }
+  }
+
+  const avgGlobalAmount =
+    globalAmounts.length > 0
+      ? globalAmounts.reduce((a, b) => a + b, 0) / globalAmounts.length
+      : 50.0;
+
+  // 4. Post-Cosign Frequency Clustering: Check in the last 12 executed treasury transactions
+  const postCosignRecent12: any[] = [];
+  for (const gItem of globalRecords.slice(0, 12)) {
+    const gEpoch = parseIsoEpoch(gItem.created_at);
+    if (latestCosignedEpoch === 0.0 || gEpoch > latestCosignedEpoch + 2.0) {
+      postCosignRecent12.push(gItem);
+    }
+  }
+
+  let sameWalletFrequency = 0;
+  for (const item of postCosignRecent12) {
+    const dest = (item.to_wallet || '').trim().toUpperCase();
+    if (dest === targetAddr.toUpperCase()) {
+      sameWalletFrequency += 1;
+    }
+  }
+
+  const isFrequencyClustering = postCosignRecent12.length >= 9 && sameWalletFrequency >= 9;
+
+  // 5. Counterparty Baseline: Recent 8 successful disbursements
+  const recentRecipient = recipientAmounts.slice(-8);
+  const avgRecipientAmount =
+    recentRecipient.length > 0
+      ? recentRecipient.reduce((a, b) => a + b, 0) / recentRecipient.length
+      : 0.0;
+  const highestEndorsedAmount =
+    recipientAmounts.length > 0 ? Math.max(...recipientAmounts) : 0.0;
+
+  let stdDev = 20.0;
+  if (recentRecipient.length > 1) {
+    const variance =
+      recentRecipient.reduce((acc, x) => acc + Math.pow(x - avgRecipientAmount, 2), 0) /
+      recentRecipient.length;
+    stdDev = Math.sqrt(variance);
+  } else {
+    stdDev = Math.max(avgRecipientAmount * 0.5, 20.0);
+  }
+
+  const recipientAgeDays =
+    firstSeenEpoch > 0 ? Math.max((nowEpoch - firstSeenEpoch) / 86400.0, 0.0) : 0.0;
+
+  return {
+    is_verified_entity: isVerifiedEntity,
+    historical_count: executedRecords.length,
+    total_attempts: records.length,
+    cosigned_count: cosignedCount,
+    transfers_since_last_cosign: transfersSinceLastCosign,
+    is_frequency_clustering: isFrequencyClustering,
+    same_wallet_frequency: sameWalletFrequency,
+    avg_recipient_amount: avgRecipientAmount,
+    highest_endorsed_amount: highestEndorsedAmount,
+    avg_global_amount: avgGlobalAmount,
+    std_dev: stdDev,
+    recipient_age_days: recipientAgeDays,
+  };
+}
+
+/**
+ * 1:1 Mirror of calculate_composite_risk in risk_scorer.py
+ */
+export async function calculateCompositeRisk(
+  input: RiskEvaluationInput
+): Promise<RiskScorerOutput> {
+  const {
+    intent_id = 0,
+    sender,
+    recipient,
+    amount,
+    asset_address = 'CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC',
+    daily_limit = 50000.0,
+    purpose_hash_hex = '',
+    org_name = 'none',
+  } = input;
+
+  const trust = await evaluateRecipientTrustHistory(
+    sender,
+    recipient,
+    org_name,
+    intent_id
+  );
+  const xlmEquivalent = normalizeToXlmEquivalent(amount, asset_address);
+
+  const isVerified = trust.is_verified_entity;
+  const pastExecutedCount = trust.historical_count;
+  const cosignedCount = trust.cosigned_count;
+  const transfersSinceCosign = trust.transfers_since_last_cosign;
+  const isFrequencyClustering = trust.is_frequency_clustering;
+  const sameWalletFrequency = trust.same_wallet_frequency;
+  const avgRecipient = trust.avg_recipient_amount;
+  const highestEndorsed = trust.highest_endorsed_amount;
+  const avgGlobal = trust.avg_global_amount;
+  const recipientAge = trust.recipient_age_days;
+
+  const features = FeatureExtractor.extractFeatures({
+    amount: xlmEquivalent,
+    dailyLimit: daily_limit,
+    destination24hCount: transfersSinceCosign,
+    recipientAgeDays: recipientAge,
+    timestampEpoch: Math.floor(Date.now() / 1000),
+    purposeHashHex: purpose_hash_hex,
+    isIndependentWallet: !isVerified,
+    historicalTransfersToWallet: pastExecutedCount,
+  });
+
+  const baseMlScore = ClientAnomalyDetector.scoreAnomaly(features) * 35.0;
+  let compositeScore = baseMlScore;
+  const rationale: string[] = [];
+
+  // 1. High-Value Protocol Cap (> 5,000 XLM / 1,000 USDC / 900 EURC)
+  if (xlmEquivalent > 5000.0) {
+    compositeScore = Math.max(compositeScore + 45.0, 78.0);
+    rationale.push(
+      'High-value disbursement (> 5,000 XLM / 1,000 USDC / 900 EURC) mandates multi-sig approval.'
+    );
+  }
+
+  // 2. Global Treasury Entropy Anomaly (> 30x of last 25 baseline)
+  let isEntropyAnomaly = false;
+  if (avgGlobal > 0) {
+    const globalEntropyRatio = xlmEquivalent / avgGlobal;
+    if (globalEntropyRatio >= 30.0 && xlmEquivalent >= 150.0) {
+      isEntropyAnomaly = true;
+      compositeScore = Math.max(compositeScore + 50.0, 80.0);
+      rationale.push(
+        `Global treasury entropy anomaly: ${globalEntropyRatio.toFixed(1)}x spike over 25-tx average (${avgGlobal.toFixed(1)} XLM). Multi-sig verification required.`
+      );
+    }
+  }
+
+  // 3. Frequency Clustering Anomaly (9+ out of last 12 without co-sign)
+  if (isFrequencyClustering) {
+    compositeScore = Math.max(compositeScore + 48.0, 78.0);
+    rationale.push(
+      `Frequency concentration detected: ${sameWalletFrequency} of the last 12 disbursements sent to this address without co-signer validation.`
+    );
+  }
+
+  // 4. Relative Counterparty Volume Surge
+  const effectiveBaseline = Math.max(avgRecipient, highestEndorsed);
+  if (pastExecutedCount >= 2 && effectiveBaseline > 0) {
+    const surgeRatio = xlmEquivalent / effectiveBaseline;
+    if ((surgeRatio >= 25.0 && xlmEquivalent >= 250.0) || surgeRatio >= 35.0) {
+      compositeScore = Math.max(compositeScore + 45.0, 78.0);
+      rationale.push(
+        `Severe flow surge: ${surgeRatio.toFixed(1)}x spike over baseline (${effectiveBaseline.toFixed(1)} XLM). Co-signer quorum required.`
+      );
+    }
+  }
+
+  // 5. Fixed Trust-Laddering Bands
+  if (!isEntropyAnomaly && !isFrequencyClustering && xlmEquivalent <= 5000.0) {
+    if (isVerified) {
+      const activeBand = cosignedCount <= 1 ? 10 : 18;
+      const bandLabel = cosignedCount <= 1 ? 'Band 1' : 'Band 2';
+
+      if (pastExecutedCount === 0 || pastExecutedCount === 1) {
+        compositeScore = Math.min(compositeScore, 18.0);
+        rationale.push('Verified GST corporate entity (routine operational transfer).');
+      } else if (pastExecutedCount === 2 && cosignedCount === 0) {
+        compositeScore = Math.max(compositeScore, 76.0);
+        rationale.push(
+          'Milestone transfer #3: Multi-sig endorsement required to establish corporate vendor tier.'
+        );
+      } else {
+        if (cosignedCount > 0) {
+          if (transfersSinceCosign >= activeBand) {
+            compositeScore = Math.max(compositeScore, 76.0);
+            rationale.push(
+              `Periodic multisig review cycle (${bandLabel}: ${activeBand} transfers completed since last endorsement).`
+            );
+          } else {
+            compositeScore = Math.min(compositeScore, 20.0);
+            rationale.push(
+              `Compliant corporate entity within active trust window (${transfersSinceCosign + 1}/${activeBand} in ${bandLabel}).`
+            );
+          }
+        } else {
+          compositeScore = Math.max(compositeScore, 78.0);
+          rationale.push('Unverified corporate sequence: Multi-sig co-signer endorsement required.');
+        }
+      }
+    } else {
+      const activeBand = cosignedCount <= 1 ? 7 : 13;
+      const bandLabel = cosignedCount <= 1 ? 'Band 1' : 'Band 2';
+
+      if (pastExecutedCount === 0) {
+        compositeScore = Math.min(Math.max(compositeScore, 28.0), 32.0);
+        rationale.push('Initial transfer to independent unverified address.');
+      } else if (pastExecutedCount === 1 && cosignedCount === 0) {
+        compositeScore = Math.max(compositeScore, 78.0);
+        rationale.push(
+          'Secondary transfer to independent wallet mandates co-signer authorization to establish trust.'
+        );
+      } else {
+        if (cosignedCount > 0) {
+          if (transfersSinceCosign >= activeBand) {
+            compositeScore = Math.max(compositeScore, 76.0);
+            rationale.push(
+              `Periodic quorum check for independent wallet (${bandLabel}: ${activeBand} transfers completed since last endorsement).`
+            );
+          } else {
+            compositeScore = Math.min(compositeScore, 24.0);
+            rationale.push(
+              `Active trust window for co-signed independent address (${transfersSinceCosign + 1}/${activeBand} in ${bandLabel}).`
+            );
+          }
+        } else {
+          compositeScore = Math.max(compositeScore, 82.0);
+          rationale.push(
+            `Sequence warning: ${pastExecutedCount + 1} transfers to unverified address without multi-sig validation.`
+          );
+        }
+      }
+    }
+  }
+
+  const finalScore = parseFloat(Math.min(Math.max(compositeScore, 0.0), 100.0).toFixed(2));
+  const shouldChallenge = finalScore >= 75.0;
+
+  if (rationale.length === 0) {
+    rationale.push('Transaction within normal relative behavioral flow.');
+  }
+
+  return {
+    intent_id,
+    risk_score: finalScore,
+    should_challenge: shouldChallenge,
+    rationale: rationale.join(' | '),
+    feature_vector: features.map((f) => parseFloat(f.toFixed(4))),
+  };
+}

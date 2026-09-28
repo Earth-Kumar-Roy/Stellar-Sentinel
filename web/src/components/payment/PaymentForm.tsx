@@ -19,6 +19,7 @@ import { ContractClient } from '../../services/contractClient';
 import { AppsScriptService } from '../../services/appsScript';
 import { SUPPORTED_TOKENS, STELLAR_CONFIG } from '../../config/constants';
 import { supabase } from '../../config/supabase';
+import { calculateCompositeRisk } from '../../utils/riskScorer';
 import type { OrgMember } from '../../types';
 
 interface PaymentFormProps {
@@ -158,46 +159,50 @@ export const PaymentForm: React.FC<PaymentFormProps> = ({
     resolveOrgAndFetchOfficers();
   }, [orgName, senderWallet]);
 
+  // Client-Side ML Risk Scorer Execution
   useEffect(() => {
     if (!isValidAddress || numericAmount <= 0) {
       setMlScore(null);
       setMlRationale(null);
       setIsHighRisk(false);
+      setIsEvaluatingMl(false);
       return;
     }
 
+    let isMounted = true;
     const timer = setTimeout(async () => {
       try {
         setIsEvaluatingMl(true);
-        const res = await fetch('http://localhost:8000/evaluate', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            intent_id: 0,
-            sender: senderWallet,
-            recipient: recipient.trim(),
-            amount: numericAmount,
-            asset_address: currentAssetAddress,
-            daily_limit: 50000.0,
-            purpose_hash_hex: ''
-          }),
+        const data = await calculateCompositeRisk({
+          intent_id: 0,
+          sender: senderWallet,
+          recipient: recipient.trim(),
+          amount: numericAmount,
+          asset_address: currentAssetAddress,
+          daily_limit: 50000.0,
+          purpose_hash_hex: '',
+          org_name: resolvedOrgName,
         });
 
-        if (res.ok) {
-          const data = await res.json();
+        if (isMounted) {
           setMlScore(data.risk_score);
           setMlRationale(data.rationale);
           setIsHighRisk(data.should_challenge || data.risk_score >= 75);
         }
-      } catch {
-        // ML service fallback
+      } catch (err) {
+        console.warn('Client risk scorer evaluation error:', err);
       } finally {
-        setIsEvaluatingMl(false);
+        if (isMounted) {
+          setIsEvaluatingMl(false);
+        }
       }
-    }, 400);
+    }, 150);
 
-    return () => clearTimeout(timer);
-  }, [recipient, amount, isValidAddress, numericAmount, senderWallet, currentAssetAddress]);
+    return () => {
+      isMounted = false;
+      clearTimeout(timer);
+    };
+  }, [recipient, numericAmount, isValidAddress, senderWallet, currentAssetAddress, resolvedOrgName]);
 
   const getMemberByWallet = (addr: string) => {
     if (!addr) return undefined;
