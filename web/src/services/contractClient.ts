@@ -7,18 +7,19 @@ import {
   BASE_FEE,
   Keypair,
   xdr,
+  Horizon,
 } from '@stellar/stellar-sdk';
 import { signTransaction } from '@stellar/freighter-api';
-import { STELLAR_CONFIG } from '../config/constants';
+import { STELLAR_CONFIG, SUPPORTED_TOKENS } from '../config/constants';
 import { supabase } from '../config/supabase';
 
-// Dedicated Keeper Bot Credentials from Environment (no hardcoded secret)
+// Dedicated Keeper Bot Credentials from Environment
 const BOT_SECRET_KEY: string = (import.meta as any).env?.VITE_BOT_SECRET_KEY || '';
 const botKeypair: Keypair = BOT_SECRET_KEY 
   ? Keypair.fromSecret(BOT_SECRET_KEY) 
   : Keypair.random();
 
-// Custom Epoch: Jan 1, 2024 00:00:00 UTC
+// Custom Epoch: Jan 1, 2024 00:00:00 UTC[cite: 27]
 const PROJECT_EPOCH_OFFSET = 1704067200;
 
 export interface CreateIntentParams {
@@ -41,6 +42,8 @@ export class ContractClient {
     allowHttp: STELLAR_CONFIG.RPC_URL.startsWith('http://'),
   });
 
+  private static horizon = new Horizon.Server(STELLAR_CONFIG.HORIZON_URL);
+
   public static encodeDbIntentId(onChainId: number): number {
     const nowSec = Math.floor(Date.now() / 1000);
     const deltaT = Math.max(nowSec - PROJECT_EPOCH_OFFSET, 1);
@@ -56,6 +59,59 @@ export class ContractClient {
     if (dbIntentId < 100000) return Math.floor(Date.now() / 1000);
     const deltaT = Math.floor(dbIntentId / 100000);
     return deltaT + PROJECT_EPOCH_OFFSET;
+  }
+
+  /**
+   * Pre-flight balance check: ensures the caller actually holds enough of the token
+   * before sending a transaction that would otherwise fail simulation.
+   */
+  private static async verifySufficientBalance(
+    caller: string,
+    assetContractId: string,
+    requiredStroops: bigint
+  ): Promise<void> {
+    try {
+      const account = await this.horizon.loadAccount(caller);
+      const isNative = assetContractId === STELLAR_CONFIG.NATIVE_TOKEN;
+
+      const tokenMeta = Object.values(SUPPORTED_TOKENS).find(
+        (t) => t.contractId.toUpperCase() === assetContractId.toUpperCase()
+      );
+      const symbol = tokenMeta?.symbol || (isNative ? 'XLM' : 'TOKEN');
+
+      if (isNative) {
+        const nativeBal = account.balances.find((b: any) => b.asset_type === 'native');
+        const availableStroops = BigInt(Math.floor(parseFloat(nativeBal?.balance || '0') * 10_000_000));
+        if (availableStroops < requiredStroops) {
+          throw new Error(
+            `Insufficient XLM balance. Available: ${nativeBal?.balance || '0'} XLM, Needed: ${(Number(requiredStroops) / 10_000_000).toFixed(2)} XLM`
+          );
+        }
+      } else {
+        const matchingLine = account.balances.find((b: any) => {
+          if (b.asset_type === 'native') return false;
+          return b.asset_code?.toUpperCase() === symbol.toUpperCase();
+        });
+
+        if (!matchingLine) {
+          throw new Error(
+            `No trustline or active balance found for ${symbol} in your wallet (${caller.slice(0, 6)}...${caller.slice(-4)}).`
+          );
+        }
+
+        const tokenBalanceStroops = BigInt(Math.floor(parseFloat(matchingLine.balance || '0') * 10_000_000));
+        if (tokenBalanceStroops < requiredStroops) {
+          throw new Error(
+            `Insufficient ${symbol} balance. Available: ${matchingLine.balance} ${symbol}, Required: ${(Number(requiredStroops) / 10_000_000).toFixed(2)} ${symbol}`
+          );
+        }
+      }
+    } catch (err: any) {
+      if (err.message && (err.message.includes('Insufficient') || err.message.includes('No trustline'))) {
+        throw err;
+      }
+      // If Horizon lookup fails due to network, let Soroban simulation proceed
+    }
   }
 
   private static async waitForConfirmation(hash: string): Promise<any> {
@@ -100,6 +156,12 @@ export class ContractClient {
     const simRes = await this.server.simulateTransaction(tx);
 
     if (rpc.Api.isSimulationError(simRes)) {
+      const errStr = String(simRes.error);
+      if (errStr.includes('#13') || errStr.includes('trustline entry is missing')) {
+        throw new Error(
+          'Token contract error: Your connected wallet does not hold this asset or the issuer balance is 0.'
+        );
+      }
       throw new Error(`Simulation failed: ${simRes.error}`);
     }
 
@@ -160,6 +222,10 @@ export class ContractClient {
     } = params;
 
     const assetAddress = params.asset || STELLAR_CONFIG.NATIVE_TOKEN;
+
+    // Check balance before simulating so user gets a clear message instead of HostError
+    await this.verifySufficientBalance(caller, assetAddress, amountStroops);
+
     const account = await this.server.getAccount(caller);
     const contract = new Contract(STELLAR_CONFIG.CONTRACT_ID);
     const purposeHashBytes = await this.computePurposeHash(purposeNote);
@@ -232,7 +298,6 @@ export class ContractClient {
       rawOnChainId = await this.getTotalIntents();
     }
 
-    // Compute mathematically unique DB intent ID using the snowflake epoch formula
     const dbUniqueIntentId = this.encodeDbIntentId(rawOnChainId);
     const descriptionWithMeta = `[DELAY:${observationDelaySeconds}] ${purposeNote.trim()}`;
 
@@ -284,7 +349,6 @@ export class ContractClient {
 
     const { hash } = await this.submitTx(tx, caller);
 
-    // Retrieve previous note to preserve ML score/notes while embedding the signer address
     const { data: existing } = await supabase
       .from('transactions_testnet')
       .select('note')

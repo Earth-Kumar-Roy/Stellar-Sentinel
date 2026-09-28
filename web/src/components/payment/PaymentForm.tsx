@@ -111,8 +111,8 @@ export const PaymentForm: React.FC<PaymentFormProps> = ({
   const numericAmount = parseFloat(amount) || 0;
   const normalizedXlmAmount = useMemo(() => {
     const symbol = activeToken.symbol.toUpperCase();
-    if (symbol === 'USDC') return numericAmount * 5.0; // 1,000 USDC = 5,000 XLM[cite: 15]
-    if (symbol === 'EURC') return numericAmount * 5.55; // 900 EURC ~ 5,000 XLM[cite: 15]
+    if (symbol === 'USDC') return numericAmount * 5.0;
+    if (symbol === 'EURC') return numericAmount * 5.55;
     return numericAmount;
   }, [numericAmount, activeToken.symbol]);
 
@@ -165,6 +165,7 @@ export const PaymentForm: React.FC<PaymentFormProps> = ({
         if (error) throw error;
 
         const members = (data as OrgMember[]) || [];
+        // Only exclude the active sender wallet, leave all other company officers available
         const eligibleOfficers = members.filter((m) => {
           return m.wallet_address.trim().toUpperCase() !== senderWallet.trim().toUpperCase();
         });
@@ -267,7 +268,7 @@ export const PaymentForm: React.FC<PaymentFormProps> = ({
         setErrorMessage('This transaction mandates 2 designated Co-Signers.');
         return;
       }
-      if (selectedOfficer1 === selectedOfficer2) {
+      if (selectedOfficer1.trim().toUpperCase() === selectedOfficer2.trim().toUpperCase()) {
         setErrorMessage('Co-Signer 1 and Co-Signer 2 must be different company officers.');
         return;
       }
@@ -278,6 +279,7 @@ export const PaymentForm: React.FC<PaymentFormProps> = ({
       }
     }
 
+    // Exact public key selected by user
     const effectiveCosigner1 = requiredCoSigners >= 1 ? selectedOfficer1.trim() : '';
     const effectiveCosigner2 = requiredCoSigners === 2 ? selectedOfficer2.trim() : '';
 
@@ -301,29 +303,12 @@ export const PaymentForm: React.FC<PaymentFormProps> = ({
         }
       }
 
-      if (effectiveCosigner1 && (!officer1Data || !officer1Data.email)) {
-        const { data: o1Db } = await supabase
-          .from('organization_members')
-          .select('*')
-          .ilike('wallet_address', effectiveCosigner1)
-          .maybeSingle();
-        if (o1Db) officer1Data = o1Db as OrgMember;
-      }
-
-      if (effectiveCosigner2 && (!officer2Data || !officer2Data.email)) {
-        const { data: o2Db } = await supabase
-          .from('organization_members')
-          .select('*')
-          .ilike('wallet_address', effectiveCosigner2)
-          .maybeSingle();
-        if (o2Db) officer2Data = o2Db as OrgMember;
-      }
-
       setSubmitStage('Submitting transaction to Soroban smart contract escrow...');
       const amountStroops = BigInt(Math.floor(numericAmount * 10_000_000));
       const observationDelaySeconds = delayMinutes * 60;
       const encodedMemo = `[DELAY:${observationDelaySeconds}] ${purposeNote.trim()}`;
 
+      // Submit the exact selected public key on-chain
       const { intentId, txHash } = await ContractClient.createIntent({
         caller: senderWallet,
         recipient: recipient.trim(),
@@ -343,16 +328,17 @@ export const PaymentForm: React.FC<PaymentFormProps> = ({
       if (intentId !== undefined && intentId !== null) {
         const recipientEntityEmail = (recipientOrg as any)?.email || (recipientOrg as any)?.contact_email || 'none';
 
+        // Write the exact public key into cosigner columns to eliminate lookup discrepancies
         await supabase
           .from('transactions_testnet')
           .update({
             note: encodedMemo,
             sender_email: activeTreasurerEmail || 'none',
             receiver_email: recipientEntityEmail,
-            cosigner_1_name: officer1Data?.full_name || effectiveCosigner1 || 'none',
+            cosigner_1_name: effectiveCosigner1 || 'none',
             cosigner_1_role: officer1Data?.role || (effectiveCosigner1 ? 'Signer' : 'none'),
             cosigner_1_email: officer1Data?.email || 'none',
-            cosigner_2_name: officer2Data?.full_name || effectiveCosigner2 || 'none',
+            cosigner_2_name: effectiveCosigner2 || 'none',
             cosigner_2_role: officer2Data?.role || (effectiveCosigner2 ? 'Signer' : 'none'),
             cosigner_2_email: officer2Data?.email || 'none',
           })
@@ -428,7 +414,6 @@ export const PaymentForm: React.FC<PaymentFormProps> = ({
 
   return (
     <form onSubmit={handleSubmit} className="space-y-5 font-mono text-xs">
-      {/* Dynamic WASM Engine Initialization Status Banner */}
       {!isEngineReady && (
         <div className="bg-[#0B0E17] border border-stellar-yellow/40 p-3 card-polygon flex items-center justify-between animate-pulse">
           <div className="flex items-center gap-2.5 text-stellar-yellow text-[11px]">
@@ -703,7 +688,7 @@ export const PaymentForm: React.FC<PaymentFormProps> = ({
                     >
                       <option value="">-- Select Second Officer from {resolvedOrgName} --</option>
                       {companyOfficers
-                        .filter((m) => m.wallet_address !== selectedOfficer1)
+                        .filter((m) => m.wallet_address.trim().toUpperCase() !== selectedOfficer1.trim().toUpperCase())
                         .map((m) => (
                           <option key={m.id} value={m.wallet_address}>
                             {m.full_name} ({m.role}) — {m.wallet_address}
