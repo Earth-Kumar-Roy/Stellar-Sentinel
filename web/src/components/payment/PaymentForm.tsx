@@ -19,7 +19,7 @@ import { ContractClient } from '../../services/contractClient';
 import { AppsScriptService } from '../../services/appsScript';
 import { SUPPORTED_TOKENS, STELLAR_CONFIG } from '../../config/constants';
 import { supabase } from '../../config/supabase';
-import { calculateCompositeRisk } from '../../utils/riskScorer';
+import { runPythonRiskEvaluation } from '../../services/pyodideScorer';
 import type { OrgMember } from '../../types';
 
 interface PaymentFormProps {
@@ -83,8 +83,8 @@ export const PaymentForm: React.FC<PaymentFormProps> = ({
   const numericAmount = parseFloat(amount) || 0;
   const normalizedXlmAmount = useMemo(() => {
     const symbol = activeToken.symbol.toUpperCase();
-    if (symbol === 'USDC') return numericAmount * 5.0;
-    if (symbol === 'EURC') return numericAmount * 5.55;
+    if (symbol === 'USDC') return numericAmount * 5.0; // 1,000 USDC = 5,000 XLM
+    if (symbol === 'EURC') return numericAmount * 5.55; // 900 EURC ~ 5,000 XLM
     return numericAmount;
   }, [numericAmount, activeToken.symbol]);
 
@@ -159,7 +159,7 @@ export const PaymentForm: React.FC<PaymentFormProps> = ({
     resolveOrgAndFetchOfficers();
   }, [orgName, senderWallet]);
 
-  // Client-Side ML Risk Scorer Execution
+  // Client-Side Python WebAssembly (Pyodide) Execution
   useEffect(() => {
     if (!isValidAddress || numericAmount <= 0) {
       setMlScore(null);
@@ -173,15 +173,15 @@ export const PaymentForm: React.FC<PaymentFormProps> = ({
     const timer = setTimeout(async () => {
       try {
         setIsEvaluatingMl(true);
-        const data = await calculateCompositeRisk({
-          intent_id: 0,
+        const data = await runPythonRiskEvaluation({
+          intentId: 0,
           sender: senderWallet,
           recipient: recipient.trim(),
           amount: numericAmount,
-          asset_address: currentAssetAddress,
-          daily_limit: 50000.0,
-          purpose_hash_hex: '',
-          org_name: resolvedOrgName,
+          assetAddress: currentAssetAddress,
+          dailyLimit: 50000.0,
+          purposeHashHex: '',
+          orgName: resolvedOrgName,
         });
 
         if (isMounted) {
@@ -190,13 +190,13 @@ export const PaymentForm: React.FC<PaymentFormProps> = ({
           setIsHighRisk(data.should_challenge || data.risk_score >= 75);
         }
       } catch (err) {
-        console.warn('Client risk scorer evaluation error:', err);
+        console.warn('Pyodide inference execution error:', err);
       } finally {
         if (isMounted) {
           setIsEvaluatingMl(false);
         }
       }
-    }, 150);
+    }, 250);
 
     return () => {
       isMounted = false;
