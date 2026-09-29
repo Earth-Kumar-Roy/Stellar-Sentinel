@@ -42,7 +42,6 @@ jobs:
             echo "::notice ::RENDER_DEPLOY_HOOK_URL secret not configured. Skipping agent deployment."
           else
             echo "Dispatching Render deployment webhook for commit ${{ github.sha }}..."
-            # Append ref query param to guarantee Render deploys the exact Git commit
             HOOK_URL="$RENDER_DEPLOY_HOOK_URL"
             if [[ "$HOOK_URL" == *"?"* ]]; then
               DEPLOY_ENDPOINT="${HOOK_URL}&ref=${{ github.sha }}"
@@ -96,18 +95,23 @@ jobs:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
           VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
           VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
-        run: vercel pull --yes --environment=production --token=$VERCEL_TOKEN
+        run: |
+          if [ -z "$VERCEL_TOKEN" ]; then
+            echo "::error ::VERCEL_TOKEN secret is not set in GitHub repository secrets."
+            exit 1
+          fi
+          vercel pull --yes --environment=production --token="${VERCEL_TOKEN}"
 
       - name: Build Web Application Artifacts
         if: steps.check_web_changes.outputs.web_files == 'true' || github.event_name == 'workflow_dispatch'
         working-directory: ./web
         env:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
-        run: vercel build --prod --token=$VERCEL_TOKEN
+        run: vercel build --prod --token="${VERCEL_TOKEN}"
 
       - name: Deploy Prebuilt Artifacts to Vercel
         if: steps.check_web_changes.outputs.web_files == 'true' || github.event_name == 'workflow_dispatch'
         working-directory: ./web
         env:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
-        run: vercel deploy --prebuilt --prod --token=$VERCEL_TOKEN
+        run: vercel deploy --prebuilt --prod --token="${VERCEL_TOKEN}"
