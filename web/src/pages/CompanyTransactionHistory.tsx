@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { 
   History, 
   ExternalLink, 
@@ -8,7 +8,10 @@ import {
   X, 
   CheckCircle2, 
   Key,
-  FileText
+  FileText,
+  Search,
+  ChevronLeft,
+  ChevronRight
 } from 'lucide-react';
 import { StatusBadge } from '../components/transactions/StatusBadge';
 import { resolveTokenByAddress } from '../config/constants';
@@ -20,11 +23,17 @@ interface CompanyTransactionHistoryProps {
   currentMember: OrgMember;
 }
 
+const PAGE_SIZE = 20;
+
 export const CompanyTransactionHistory: React.FC<CompanyTransactionHistoryProps> = ({ currentMember }) => {
   const [transactions, setTransactions] = useState<PaymentIntentRecord[]>([]);
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [orgWallets, setOrgWallets] = useState<string[]>([]);
   const [selectedTx, setSelectedTx] = useState<PaymentIntentRecord | null>(null);
+
+  // Search & Pagination States
+  const [searchQuery, setSearchQuery] = useState<string>('');
+  const [currentPage, setCurrentPage] = useState<number>(1);
 
   const fetchCompanyHistory = useCallback(async () => {
     setIsLoading(true);
@@ -67,6 +76,11 @@ export const CompanyTransactionHistory: React.FC<CompanyTransactionHistoryProps>
     fetchCompanyHistory();
   }, [fetchCompanyHistory]);
 
+  // Reset to first page whenever search query changes
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchQuery]);
+
   const formatAddress = (addr?: string) => {
     if (!addr || addr === 'none') return 'None';
     return `${addr.slice(0, 6)}...${addr.slice(-6)}`;
@@ -75,6 +89,41 @@ export const CompanyTransactionHistory: React.FC<CompanyTransactionHistoryProps>
   const totalVolume = transactions
     .filter((tx) => tx.status.toLowerCase() === 'executed')
     .reduce((sum, tx) => sum + (parseFloat(tx.total_amount) || 0), 0);
+
+  // Search filtering by Intent ID, Amount, or Associated Wallets
+  const filteredTransactions = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    if (!q) return transactions;
+
+    return transactions.filter((tx: any) => {
+      const intentIdStr = String(tx.intent_id || '');
+      const onChainIdStr = String(ContractClient.decodeOnChainId(tx.intent_id || 0));
+      const amountStr = String(tx.total_amount || '');
+      const fromWallet = (tx.from_wallet || '').toLowerCase();
+      const toWallet = (tx.to_wallet || tx.recipient || '').toLowerCase();
+      const cosigner1 = (tx.cosigner_1_name || '').toLowerCase();
+      const cosigner2 = (tx.cosigner_2_name || '').toLowerCase();
+      const txHash = (tx.tx_hash || '').toLowerCase();
+
+      return (
+        intentIdStr.includes(q) ||
+        onChainIdStr.includes(q) ||
+        amountStr.includes(q) ||
+        fromWallet.includes(q) ||
+        toWallet.includes(q) ||
+        cosigner1.includes(q) ||
+        cosigner2.includes(q) ||
+        txHash.includes(q)
+      );
+    });
+  }, [transactions, searchQuery]);
+
+  // Pagination calculation
+  const totalPages = Math.ceil(filteredTransactions.length / PAGE_SIZE) || 1;
+  const paginatedTransactions = useMemo(() => {
+    const startIndex = (currentPage - 1) * PAGE_SIZE;
+    return filteredTransactions.slice(startIndex, startIndex + PAGE_SIZE);
+  }, [filteredTransactions, currentPage]);
 
   return (
     <div className="space-y-6 font-mono text-xs max-w-6xl mx-auto">
@@ -133,11 +182,37 @@ export const CompanyTransactionHistory: React.FC<CompanyTransactionHistoryProps>
 
       {/* Ledger Feed */}
       <div className="bg-[#121620] border border-[#232938] p-6 card-polygon space-y-4">
-        <div className="flex items-center justify-between border-b border-[#232938] pb-2">
-          <h2 className="text-white font-bold uppercase tracking-wider text-xs">
-            Company Settlement Logs
-          </h2>
-          <span className="text-[10px] text-stellar-muted">Click row for full intent audit</span>
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-[#232938] pb-3">
+          <div>
+            <h2 className="text-white font-bold uppercase tracking-wider text-xs">
+              Company Settlement Logs
+            </h2>
+            <span className="text-[10px] text-stellar-muted">
+              Showing {filteredTransactions.length > 0 ? ((currentPage - 1) * PAGE_SIZE) + 1 : 0}-
+              {Math.min(currentPage * PAGE_SIZE, filteredTransactions.length)} of {filteredTransactions.length} records
+            </span>
+          </div>
+
+          {/* Search Input Filter */}
+          <div className="relative w-full sm:w-80">
+            <Search className="w-4 h-4 text-stellar-muted absolute left-3 top-2.5 pointer-events-none" />
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="Search Intent ID, Amount, Wallet..."
+              className="w-full bg-[#0B0D13] border border-[#232938] pl-9 pr-8 py-2 text-white focus:border-stellar-yellow outline-none text-xs placeholder:text-zinc-600"
+            />
+            {searchQuery && (
+              <button
+                type="button"
+                onClick={() => setSearchQuery('')}
+                className="absolute right-2.5 top-2.5 text-zinc-500 hover:text-white"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            )}
+          </div>
         </div>
 
         {isLoading ? (
@@ -145,99 +220,155 @@ export const CompanyTransactionHistory: React.FC<CompanyTransactionHistoryProps>
             <span className="animate-spin inline-block text-base mr-2">⟳</span>
             Querying company-wide settlement history from Supabase...
           </div>
-        ) : transactions.length === 0 ? (
+        ) : filteredTransactions.length === 0 ? (
           <div className="p-12 text-center text-stellar-muted">
-            No transaction intents found for this company profile yet.
+            {searchQuery 
+              ? `No transactions match your search "${searchQuery}".` 
+              : 'No transaction intents found for this company profile yet.'}
           </div>
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-left border-collapse">
-              <thead>
-                <tr className="border-b border-[#232938] text-stellar-muted text-[10px] uppercase">
-                  <th className="py-3 px-3">Intent ID</th>
-                  <th className="py-3 px-3">Recipient Counterparty</th>
-                  <th className="py-3 px-3">Amount & Token</th>
-                  <th className="py-3 px-3">Status</th>
-                  <th className="py-3 px-3 min-w-[280px]">Lifecycle / Notes</th>
-                  <th className="py-3 px-3 text-right">Explorer</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-[#232938] text-[11px]">
-                {transactions.map((tx) => {
-                  const token = resolveTokenByAddress((tx as any).asset_address);
-                  const recipient = tx.to_wallet || (tx as any).recipient || 'none';
-                  const onChainDisplayId = ContractClient.decodeOnChainId(tx.intent_id);
+          <>
+            <div className="overflow-x-auto">
+              <table className="w-full text-left border-collapse">
+                <thead>
+                  <tr className="border-b border-[#232938] text-stellar-muted text-[10px] uppercase">
+                    <th className="py-3 px-3">Intent ID</th>
+                    <th className="py-3 px-3">Recipient Counterparty</th>
+                    <th className="py-3 px-3">Amount & Token</th>
+                    <th className="py-3 px-3">Status</th>
+                    <th className="py-3 px-3 min-w-[280px]">Lifecycle / Notes</th>
+                    <th className="py-3 px-3 text-right">Explorer</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-[#232938] text-[11px]">
+                  {paginatedTransactions.map((tx) => {
+                    const token = resolveTokenByAddress((tx as any).asset_address);
+                    const recipient = tx.to_wallet || (tx as any).recipient || 'none';
+                    const onChainDisplayId = ContractClient.decodeOnChainId(tx.intent_id);
 
-                  return (
-                    <tr 
-                      key={tx.id || tx.intent_id} 
-                      onClick={() => setSelectedTx(tx)}
-                      className="hover:bg-[#0B0D13] transition-colors align-top group cursor-pointer"
-                    >
-                      <td className="py-3 px-3 font-bold text-stellar-yellow group-hover:underline">
-                        <div>#{tx.intent_id}</div>
-                        <div className="text-[9px] text-zinc-500 font-mono">On-Chain #{onChainDisplayId}</div>
-                      </td>
+                    return (
+                      <tr 
+                        key={tx.id || tx.intent_id} 
+                        onClick={() => setSelectedTx(tx)}
+                        className="hover:bg-[#0B0D13] transition-colors align-top group cursor-pointer"
+                      >
+                        <td className="py-3 px-3 font-bold text-stellar-yellow group-hover:underline">
+                          <div>#{tx.intent_id}</div>
+                          <div className="text-[9px] text-zinc-500 font-mono">On-Chain #{onChainDisplayId}</div>
+                        </td>
 
-                      <td className="py-3 px-3" onClick={(e) => e.stopPropagation()}>
-                        <div className="flex items-center gap-1.5">
-                          <span className="text-white font-mono">{formatAddress(recipient)}</span>
-                          {recipient !== 'none' && (
+                        <td className="py-3 px-3" onClick={(e) => e.stopPropagation()}>
+                          <div className="flex items-center gap-1.5">
+                            <span className="text-white font-mono">{formatAddress(recipient)}</span>
+                            {recipient !== 'none' && (
+                              <a
+                                href={`https://stellar.expert/explorer/testnet/account/${recipient}`}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="text-stellar-muted hover:text-stellar-yellow"
+                                title={`Recipient Account: ${recipient}`}
+                              >
+                                <ExternalLink className="w-3 h-3" />
+                              </a>
+                            )}
+                          </div>
+                          {tx.receiver_email && <div className="text-[10px] text-stellar-muted">{tx.receiver_email}</div>}
+                        </td>
+
+                        <td className="py-3 px-3 font-bold text-white">
+                          <span>{parseFloat(tx.total_amount).toFixed(2)}</span>{' '}
+                          <span className="text-stellar-yellow text-[10px] ml-0.5">{token.symbol}</span>
+                        </td>
+
+                        <td className="py-3 px-3">
+                          <StatusBadge status={tx.status} />
+                        </td>
+
+                        <td className="py-3 px-3 text-stellar-muted whitespace-normal break-words max-w-md">
+                          <div className="text-zinc-300">
+                            {tx.timestamp_ist || new Date(tx.created_at).toLocaleString()}
+                          </div>
+                          {tx.note && (
+                            <div className="text-[11px] text-zinc-400 mt-1 leading-relaxed line-clamp-2" title={tx.note}>
+                              {tx.note}
+                            </div>
+                          )}
+                        </td>
+
+                        <td className="py-3 px-3 text-right" onClick={(e) => e.stopPropagation()}>
+                          {tx.tx_hash ? (
                             <a
-                              href={`https://stellar.expert/explorer/testnet/account/${recipient}`}
+                              href={`https://stellar.expert/explorer/testnet/tx/${tx.tx_hash}`}
                               target="_blank"
                               rel="noreferrer"
-                              className="text-stellar-muted hover:text-stellar-yellow"
-                              title={`Recipient Account: ${recipient}`}
+                              className="text-stellar-yellow hover:underline inline-flex items-center gap-1 font-mono text-[10px]"
                             >
+                              <span>Tx Hash</span>
                               <ExternalLink className="w-3 h-3" />
                             </a>
+                          ) : (
+                            <span className="text-zinc-600 text-[10px]">No Hash Recorded</span>
                           )}
-                        </div>
-                        {tx.receiver_email && <div className="text-[10px] text-stellar-muted">{tx.receiver_email}</div>}
-                      </td>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
 
-                      <td className="py-3 px-3 font-bold text-white">
-                        <span>{parseFloat(tx.total_amount).toFixed(2)}</span>{' '}
-                        <span className="text-stellar-yellow text-[10px] ml-0.5">{token.symbol}</span>
-                      </td>
+            {/* Pagination Controls (20 per page) */}
+            {totalPages > 1 && (
+              <div className="flex flex-col sm:flex-row items-center justify-between gap-3 pt-4 border-t border-[#232938]">
+                <div className="text-[11px] text-stellar-muted">
+                  Page <span className="text-white font-bold">{currentPage}</span> of <span className="text-white font-bold">{totalPages}</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    disabled={currentPage === 1}
+                    onClick={() => setCurrentPage((prev) => Math.max(prev - 1, 1))}
+                    className="px-3 py-1.5 border border-[#232938] hover:border-stellar-yellow text-stellar-muted hover:text-white bg-[#0B0D13] disabled:opacity-40 disabled:hover:border-[#232938] disabled:cursor-not-allowed btn-polygon flex items-center gap-1 cursor-pointer"
+                  >
+                    <ChevronLeft className="w-3.5 h-3.5" /> PREVIOUS
+                  </button>
 
-                      <td className="py-3 px-3">
-                        <StatusBadge status={tx.status} />
-                      </td>
+                  <div className="flex items-center gap-1">
+                    {Array.from({ length: totalPages }, (_, i) => i + 1)
+                      .filter((p) => p === 1 || p === totalPages || Math.abs(p - currentPage) <= 1)
+                      .map((page, idx, arr) => {
+                        const showEllipsis = idx > 0 && page - arr[idx - 1] > 1;
+                        return (
+                          <React.Fragment key={page}>
+                            {showEllipsis && <span className="px-1 text-zinc-600">...</span>}
+                            <button
+                              type="button"
+                              onClick={() => setCurrentPage(page)}
+                              className={`w-7 h-7 flex items-center justify-center border text-[11px] cursor-pointer ${
+                                currentPage === page
+                                  ? 'border-stellar-yellow bg-stellar-yellow/15 text-stellar-yellow font-bold'
+                                  : 'border-[#232938] bg-[#0B0D13] text-stellar-muted hover:text-white hover:border-zinc-500'
+                              }`}
+                            >
+                              {page}
+                            </button>
+                          </React.Fragment>
+                        );
+                      })}
+                  </div>
 
-                      <td className="py-3 px-3 text-stellar-muted whitespace-normal break-words max-w-md">
-                        <div className="text-zinc-300">
-                          {tx.timestamp_ist || new Date(tx.created_at).toLocaleString()}
-                        </div>
-                        {tx.note && (
-                          <div className="text-[11px] text-zinc-400 mt-1 leading-relaxed line-clamp-2" title={tx.note}>
-                            {tx.note}
-                          </div>
-                        )}
-                      </td>
-
-                      <td className="py-3 px-3 text-right" onClick={(e) => e.stopPropagation()}>
-                        {tx.tx_hash ? (
-                          <a
-                            href={`https://stellar.expert/explorer/testnet/tx/${tx.tx_hash}`}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="text-stellar-yellow hover:underline inline-flex items-center gap-1 font-mono text-[10px]"
-                          >
-                            <span>Tx Hash</span>
-                            <ExternalLink className="w-3 h-3" />
-                          </a>
-                        ) : (
-                          <span className="text-zinc-600 text-[10px]">No Hash Recorded</span>
-                        )}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
+                  <button
+                    type="button"
+                    disabled={currentPage === totalPages}
+                    onClick={() => setCurrentPage((prev) => Math.min(prev + 1, totalPages))}
+                    className="px-3 py-1.5 border border-[#232938] hover:border-stellar-yellow text-stellar-muted hover:text-white bg-[#0B0D13] disabled:opacity-40 disabled:hover:border-[#232938] disabled:cursor-not-allowed btn-polygon flex items-center gap-1 cursor-pointer"
+                  >
+                    NEXT <ChevronRight className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              </div>
+            )}
+          </>
         )}
       </div>
 

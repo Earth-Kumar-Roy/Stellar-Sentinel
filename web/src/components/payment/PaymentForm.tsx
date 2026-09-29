@@ -12,7 +12,9 @@ import {
   CheckCircle2, 
   Mail, 
   Database,
-  Cpu
+  Cpu,
+  Zap,
+  Sliders
 } from 'lucide-react';
 import { useRecipientOrg } from '../../hooks/useRecipientOrg';
 import { RecipientOrgCard } from './RecipientOrgCard';
@@ -51,7 +53,13 @@ export const PaymentForm: React.FC<PaymentFormProps> = ({
   const [recipient, setRecipient] = useState<string>(initialRecipient || '');
   const [amount, setAmount] = useState<string>('');
   const [purposeNote, setPurposeNote] = useState<string>('');
-  const [delayMinutes, setDelayMinutes] = useState<number>(3);
+
+  const [windowMode, setWindowMode] = useState<'fastpath' | 'flexible'>('flexible');
+  const [flexibleHours, setFlexibleHours] = useState<number>(6);
+
+  const delayMinutes = useMemo(() => {
+    return windowMode === 'fastpath' ? 120 : flexibleHours * 60;
+  }, [windowMode, flexibleHours]);
 
   const [companyOfficers, setCompanyOfficers] = useState<OrgMember[]>([]);
   const [isLoadingMembers, setIsLoadingMembers] = useState<boolean>(true);
@@ -65,7 +73,6 @@ export const PaymentForm: React.FC<PaymentFormProps> = ({
   const [submitStage, setSubmitStage] = useState<string>('');
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
-  // Engine pre-warming state
   const [isEngineReady, setIsEngineReady] = useState<boolean>(isPyodideReady());
   const [engineWarmupStage, setEngineWarmupStage] = useState<string>('Initializing Python WASM Runtime...');
 
@@ -77,7 +84,6 @@ export const PaymentForm: React.FC<PaymentFormProps> = ({
   const recipientInputId = useId();
   const amountInputId = useId();
   const purposeInputId = useId();
-  const delayInputId = useId();
 
   const { recipientOrg, isSearching, isValidAddress } = useRecipientOrg(recipient);
 
@@ -85,7 +91,6 @@ export const PaymentForm: React.FC<PaymentFormProps> = ({
     setRecipient(initialRecipient || '');
   }, [initialRecipient]);
 
-  // Pre-warm Pyodide WASM Runtime on load
   useEffect(() => {
     if (isPyodideReady()) {
       setIsEngineReady(true);
@@ -187,7 +192,6 @@ export const PaymentForm: React.FC<PaymentFormProps> = ({
     resolveOrgAndFetchOfficers();
   }, [orgName, senderWallet]);
 
-  // Client-Side Pyodide Risk Scoring
   useEffect(() => {
     if (!isValidAddress || numericAmount <= 0) {
       setMlScore(null);
@@ -257,8 +261,8 @@ export const PaymentForm: React.FC<PaymentFormProps> = ({
       return;
     }
 
-    if (delayMinutes < 3 || delayMinutes > 720) {
-      setErrorMessage('Observation delay must be configured between 3 minutes and 720 minutes (12 hours).');
+    if (delayMinutes < 120 || delayMinutes > 720) {
+      setErrorMessage('Observation delay must be configured between 2 hours and 12 hours.');
       return;
     }
 
@@ -306,7 +310,6 @@ export const PaymentForm: React.FC<PaymentFormProps> = ({
       const observationDelaySeconds = delayMinutes * 60;
       const encodedMemo = `[DELAY:${observationDelaySeconds}] ${purposeNote.trim()}`;
 
-      // Submit on-chain with exact public keys
       const { intentId, txHash } = await ContractClient.createIntent({
         caller: senderWallet,
         recipient: recipient.trim(),
@@ -326,7 +329,6 @@ export const PaymentForm: React.FC<PaymentFormProps> = ({
       if (intentId !== undefined && intentId !== null) {
         const recipientEntityEmail = (recipientOrg as any)?.email || (recipientOrg as any)?.contact_email || 'none';
 
-        // Direct upfront status assignment: quarantined if risk >= 75, else observing
         const initialStatus = isHighRisk ? 'quarantined' : 'observing';
         const initialNote = isHighRisk 
           ? `[QUARANTINED] ML Score: ${(mlScore || 78).toFixed(2)} | ${mlRationale || 'Anomaly challenge triggered'} | ${encodedMemo}`
@@ -406,7 +408,7 @@ export const PaymentForm: React.FC<PaymentFormProps> = ({
       } else if (msg.includes('Error(Contract, #20)') || msg.includes('AmountExceedsPerTxLimit')) {
         msg = '[Error #20: AmountExceedsPerTxLimit] Amount exceeds maximum protocol limits.';
       } else if (msg.includes('Error(Contract, #12)') || msg.includes('InvalidIntentParameters')) {
-        msg = '[Error #12: InvalidIntentParameters] Timelock delay must be configured between 3 minutes and 12 hours.';
+        msg = '[Error #12: InvalidIntentParameters] Timelock delay must be configured between 2 hours and 12 hours.';
       }
       setErrorMessage(msg);
     } finally {
@@ -417,6 +419,8 @@ export const PaymentForm: React.FC<PaymentFormProps> = ({
 
   const selectedOfficer1Obj = getMemberByWallet(selectedOfficer1);
   const selectedOfficer2Obj = getMemberByWallet(selectedOfficer2);
+
+  const sliderPercentage = ((flexibleHours - 3) / (12 - 3)) * 100;
 
   return (
     <form onSubmit={handleSubmit} className="space-y-5 font-mono text-xs">
@@ -530,61 +534,124 @@ export const PaymentForm: React.FC<PaymentFormProps> = ({
         address={recipient}
       />
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <div>
-          <label htmlFor={amountInputId} className="block text-stellar-muted uppercase mb-1 text-[10px] tracking-wider flex items-center justify-between">
-            <span>Disbursement Amount ({activeToken.symbol})</span>
-            {numericAmount > 0 && (
-              <span className="text-stellar-yellow text-[10px] font-bold">
-                ≈ {normalizedXlmAmount.toLocaleString(undefined, { maximumFractionDigits: 1 })} XLM EQ
+      {/* Financial Amount & Observation Window Compact Grid Layout */}
+      <div className="bg-[#0B0D13] border border-[#232938] p-4 card-polygon space-y-3.5">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 items-start">
+          {/* Half 1: Disbursement Amount */}
+          <div className="space-y-1">
+            <label htmlFor={amountInputId} className="block text-stellar-muted uppercase text-[10px] tracking-wider flex items-center justify-between">
+              <span>Disbursement Amount</span>
+              {numericAmount > 0 && (
+                <span className="text-stellar-yellow text-[10px] font-bold">
+                  ≈ {normalizedXlmAmount.toLocaleString(undefined, { maximumFractionDigits: 1 })} XLM EQ
+                </span>
+              )}
+            </label>
+            <div className="relative">
+              <input
+                id={amountInputId}
+                type="number"
+                step="0.0000001"
+                min="0.0000001"
+                required
+                value={amount}
+                onChange={(e) => setAmount(e.target.value)}
+                placeholder="1000.00"
+                className="w-full bg-[#121620] border border-[#232938] px-3.5 py-2 text-white focus:border-stellar-yellow outline-none text-base font-bold font-mono"
+              />
+              <div className="absolute right-3 top-2.5 text-xs text-stellar-yellow font-bold uppercase pointer-events-none">
+                {activeToken.symbol}
+              </div>
+            </div>
+          </div>
+
+          {/* Half 2: Fast Settle vs Flexible Selector */}
+          <div className="space-y-1">
+            <div className="flex items-center justify-between text-stellar-muted text-[10px] uppercase tracking-wider">
+              <span className="flex items-center gap-1.5">
+                <Clock className="w-3 h-3 text-stellar-yellow" />
+                Observation Timelock
               </span>
-            )}
-          </label>
-          <div className="relative">
-            <input
-              id={amountInputId}
-              type="number"
-              step="0.0000001"
-              min="0.0000001"
-              required
-              value={amount}
-              onChange={(e) => setAmount(e.target.value)}
-              placeholder="1000.00"
-              className="w-full bg-[#0B0D13] border border-[#232938] px-3.5 py-2.5 text-white focus:border-stellar-yellow outline-none text-base font-bold font-mono"
-            />
-            <div className="absolute right-3 top-2.5 text-xs text-stellar-yellow font-bold uppercase pointer-events-none">
-              {activeToken.symbol}
+              <span className="text-stellar-yellow font-bold font-mono text-[11px]">
+                {delayMinutes / 60}H ({delayMinutes}m)
+              </span>
+            </div>
+
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() => setWindowMode('fastpath')}
+                className={`p-2 border text-left btn-polygon transition-all cursor-pointer ${
+                  windowMode === 'fastpath'
+                    ? 'border-stellar-yellow bg-stellar-yellow/15 text-white ring-1 ring-stellar-yellow'
+                    : 'border-[#232938] bg-[#121620] text-stellar-muted hover:border-zinc-500 hover:text-white'
+                }`}
+              >
+                <div className="flex items-center justify-between">
+                  <span className="font-bold text-[11px] flex items-center gap-1 text-white">
+                    <Zap className="w-3 h-3 text-stellar-yellow" /> FastPath
+                  </span>
+                  <span className="text-[8px] text-amber-400 bg-amber-950/80 px-1 py-0.5 border border-amber-600/40 font-bold">
+                    2H
+                  </span>
+                </div>
+                <div className="text-[9px] text-stellar-muted truncate mt-0.5">Rapid dispatch</div>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setWindowMode('flexible')}
+                className={`p-2 border text-left btn-polygon transition-all cursor-pointer ${
+                  windowMode === 'flexible'
+                    ? 'border-stellar-yellow bg-stellar-yellow/15 text-white ring-1 ring-stellar-yellow'
+                    : 'border-[#232938] bg-[#121620] text-stellar-muted hover:border-zinc-500 hover:text-white'
+                }`}
+              >
+                <div className="flex items-center justify-between">
+                  <span className="font-bold text-[11px] flex items-center gap-1 text-white">
+                    <Sliders className="w-3 h-3 text-stellar-yellow" /> Flexible
+                  </span>
+                  <span className="text-[8px] text-emerald-400 bg-emerald-950/80 px-1 py-0.5 border border-emerald-600/40 font-bold">
+                    3H-12H (DEF 6H)
+                  </span>
+                </div>
+                <div className="text-[9px] text-stellar-muted truncate mt-0.5">Audited window</div>
+              </button>
             </div>
           </div>
         </div>
 
-        <div>
-          <label htmlFor={delayInputId} className="block text-stellar-muted uppercase mb-1 text-[10px] tracking-wider flex items-center justify-between">
-            <span>Observation Time-Lock (Minutes)</span>
-            <span className="text-stellar-yellow font-bold">
-              {delayMinutes}m ({(delayMinutes / 60).toFixed(1)}h)
-            </span>
-          </label>
-          <div className="relative">
-            <input
-              id={delayInputId}
-              type="number"
-              min="3"
-              max="720"
-              required
-              value={delayMinutes}
-              onChange={(e) => setDelayMinutes(parseInt(e.target.value, 10) || 3)}
-              placeholder="3"
-              className="w-full bg-[#0B0D13] border border-[#232938] px-3.5 py-2.5 text-white focus:border-stellar-yellow outline-none text-base font-bold font-mono"
-            />
-            <div className="absolute right-3 top-2.5 text-xs text-stellar-muted font-bold pointer-events-none">
-              MINS
+        {/* Pointer line located directly below (Flexible mode) */}
+        {windowMode === 'flexible' && (
+          <div className="bg-[#121620] border border-[#232938] p-3 card-polygon space-y-1.5 pt-2">
+            <div className="flex items-center justify-between text-[11px]">
+              <span className="text-stellar-muted">Selected Window:</span>
+              <span className="text-white font-bold font-mono">
+                {flexibleHours} Hours ({flexibleHours * 60} Minutes)
+              </span>
+            </div>
+            <div className="py-1">
+              <input
+                type="range"
+                min="3"
+                max="12"
+                step="1"
+                value={flexibleHours}
+                onChange={(e) => setFlexibleHours(parseInt(e.target.value, 10))}
+                style={{
+                  background: `linear-gradient(to right, #F5A623 0%, #F5A623 ${sliderPercentage}%, #232938 ${sliderPercentage}%, #232938 100%)`
+                }}
+                className="w-full cursor-pointer h-2 rounded-full appearance-none outline-none border border-[#1b212f] [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:h-4 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-[#F5A623] [&::-webkit-slider-thumb]:border-2 [&::-webkit-slider-thumb]:border-[#121620] [&::-webkit-slider-thumb]:shadow-[0_0_8px_rgba(245,166,35,0.7)] [&::-webkit-slider-thumb]:cursor-pointer [&::-moz-range-thumb]:w-4 [&::-moz-range-thumb]:h-4 [&::-moz-range-thumb]:rounded-full [&::-moz-range-thumb]:bg-[#F5A623] [&::-moz-range-thumb]:border-2 [&::-moz-range-thumb]:border-[#121620] [&::-moz-range-thumb]:shadow-[0_0_8px_rgba(245,166,35,0.7)] [&::-moz-range-thumb]:cursor-pointer"
+              />
+            </div>
+            <div className="flex justify-between text-[9px] text-stellar-muted font-mono pt-0.5">
+              <span>3H (Min)</span>
+              <span className={flexibleHours === 6 ? 'text-stellar-yellow font-bold' : ''}>6H (Default)</span>
+              <span>9H</span>
+              <span>12H (Max)</span>
             </div>
           </div>
-          <span className="text-[10px] text-stellar-muted mt-1 block">
-            Min 3 minutes (Test Window) — Max 720 minutes (12 Hours)
-          </span>
-        </div>
+        )}
       </div>
 
       {(mlScore !== null || isEvaluatingMl) && (
