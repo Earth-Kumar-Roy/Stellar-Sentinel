@@ -98,12 +98,6 @@ export const OngoingIntents: React.FC<OngoingIntentsProps> = ({
 
         if (!isActiveState) return false;
 
-        // Isolate Company Data:
-        // A transaction belongs to this company's queue ONLY IF:
-        // 1. it.org_name matches this user's company name (case-insensitive)
-        // 2. OR it was sent from one of this company's member wallets (from_wallet)
-        // 3. OR the logged-in wallet is designated as Co-Signer 1 or Co-Signer 2
-        // Receiving an outbound payment (to_wallet) DOES NOT put it in your company's ongoing approval queue!
         const intentOrg = (it.org_name || '').toString().trim().toLowerCase();
         const fromWallet = (it.from_wallet || '').toString().trim().toUpperCase();
         const c1 = (it.cosigner_1_name || '').toString().trim().toUpperCase();
@@ -118,12 +112,10 @@ export const OngoingIntents: React.FC<OngoingIntentsProps> = ({
           (c2 !== 'NONE' && (c2 === normCurrentWallet || c2Resolved === normCurrentWallet))
         );
 
-        // Must satisfy origin organization OR explicit multi-sig assignment
         if (normUserOrg && normUserOrg !== 'none') {
           return (isMyOrgName || isFromMyOrgWallet || isAssignedToMe);
         }
 
-        // Fallback if userOrgName is uninitialized: match strictly against wallet activity
         return (fromWallet === normCurrentWallet || isAssignedToMe);
       })
       .sort((a, b) => {
@@ -151,7 +143,13 @@ export const OngoingIntents: React.FC<OngoingIntentsProps> = ({
     if (!walletAddress || walletAddress === 'none') return false;
     const combined = `${note || ''} ${description || ''}`.toUpperCase();
     const targetWallet = walletAddress.trim().toUpperCase();
-    return combined.includes(`[SIGNED:${targetWallet}]`) || combined.includes('CO-SIGNER APPROVED');
+    const resolvedWallet = memberDirectory[targetWallet] || targetWallet;
+
+    return (
+      combined.includes(`[SIGNED:${targetWallet}]`) || 
+      combined.includes(`[SIGNED:${resolvedWallet}]`) || 
+      combined.includes('CO-SIGNER APPROVED')
+    );
   };
 
   const resolveIntentEmails = async (record: any) => {
@@ -358,7 +356,6 @@ export const OngoingIntents: React.FC<OngoingIntentsProps> = ({
       const onChainId = ContractClient.decodeOnChainId(record.intent_id);
 
       if (decision === 'approved') {
-        // Safe approve call: Soroban verify if caller is in intent.cosigners vector
         await ContractClient.approveIntent(currentWallet, onChainId, false);
 
         const signedTag = `[SIGNED:${currentWallet.trim()}]`;
@@ -367,6 +364,7 @@ export const OngoingIntents: React.FC<OngoingIntentsProps> = ({
           ? existingNote
           : `${existingNote} ${signedTag}`.trim();
 
+        // When approved by co-signer, directly restore status to 'observing'
         await supabase
           .from('transactions_testnet')
           .update({
@@ -474,10 +472,11 @@ export const OngoingIntents: React.FC<OngoingIntentsProps> = ({
 
             const normalizedCurrentWallet = (currentWallet || '').trim().toUpperCase();
 
+            // Bidirectional resolution: Full Name <-> Wallet
             const c1ResolvedWallet = memberDirectory[cosigner1.toUpperCase()] || cosigner1.toUpperCase();
             const c2ResolvedWallet = memberDirectory[cosigner2.toUpperCase()] || cosigner2.toUpperCase();
 
-            // Strict assignment check: Only true if this wallet/name is explicitly designated on THIS transaction
+            // Explicit assignment match
             const isAssignedCosigner = 
               (cosigner1 !== 'none' && (cosigner1.toUpperCase() === normalizedCurrentWallet || c1ResolvedWallet === normalizedCurrentWallet)) ||
               (cosigner2 !== 'none' && (cosigner2.toUpperCase() === normalizedCurrentWallet || c2ResolvedWallet === normalizedCurrentWallet)) ||
@@ -598,7 +597,7 @@ export const OngoingIntents: React.FC<OngoingIntentsProps> = ({
                       {cosigner1 !== 'none' && cosigner1 !== '' && (
                         <div className="flex items-center justify-between bg-[#0B0D13] p-2 border border-[#1b212f]">
                           <span className="text-stellar-muted truncate">
-                            Co-Signer 1: <strong className={c1ResolvedWallet === normalizedCurrentWallet ? 'text-stellar-yellow' : 'text-white'}>{formatAddress(cosigner1)} {c1ResolvedWallet === normalizedCurrentWallet ? '(YOU)' : ''}</strong>
+                            Co-Signer 1: <strong className={c1ResolvedWallet === normalizedCurrentWallet ? 'text-stellar-yellow' : 'text-white'}>{memberDirectory[cosigner1.toUpperCase()] || formatAddress(cosigner1)} {c1ResolvedWallet === normalizedCurrentWallet ? '(YOU)' : ''}</strong>
                           </span>
                           {hasCosigner1Signed ? (
                             <span className="flex items-center gap-1 text-[10px] text-emerald-400 font-bold bg-emerald-950/40 px-2 py-0.5 border border-emerald-500/40 rounded shrink-0">
@@ -615,7 +614,7 @@ export const OngoingIntents: React.FC<OngoingIntentsProps> = ({
                       {cosigner2 !== 'none' && cosigner2 !== '' && (
                         <div className="flex items-center justify-between bg-[#0B0D13] p-2 border border-[#1b212f]">
                           <span className="text-stellar-muted truncate">
-                            Co-Signer 2: <strong className={c2ResolvedWallet === normalizedCurrentWallet ? 'text-stellar-yellow' : 'text-white'}>{formatAddress(cosigner2)} {c2ResolvedWallet === normalizedCurrentWallet ? '(YOU)' : ''}</strong>
+                            Co-Signer 2: <strong className={c2ResolvedWallet === normalizedCurrentWallet ? 'text-stellar-yellow' : 'text-white'}>{memberDirectory[cosigner2.toUpperCase()] || formatAddress(cosigner2)} {c2ResolvedWallet === normalizedCurrentWallet ? '(YOU)' : ''}</strong>
                           </span>
                           {hasCosigner2Signed ? (
                             <span className="flex items-center gap-1 text-[10px] text-emerald-400 font-bold bg-emerald-950/40 px-2 py-0.5 border border-emerald-500/40 rounded shrink-0">
@@ -707,8 +706,8 @@ export const OngoingIntents: React.FC<OngoingIntentsProps> = ({
                     </button>
                   )}
 
-                  {/* Co-Signer Approval: Only for explicitly assigned co-signers BEFORE maturity */}
-                  {isAssignedCosigner && !isMatured && (
+                  {/* Co-Signer Approval: Stays active whenever this signer is assigned and has not yet signed */}
+                  {isAssignedCosigner && (
                     hasCurrentWalletSigned ? (
                       <div className="px-4 py-2 bg-emerald-950/40 border border-emerald-500/50 text-emerald-400 font-bold flex items-center gap-1.5 rounded">
                         <CheckCircle2 className="w-4 h-4" />

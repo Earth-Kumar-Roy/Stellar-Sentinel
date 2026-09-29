@@ -85,7 +85,7 @@ export const PaymentForm: React.FC<PaymentFormProps> = ({
     setRecipient(initialRecipient || '');
   }, [initialRecipient]);
 
-  // Pre-warm the Python runtime immediately when the form mounts
+  // Pre-warm Pyodide WASM Runtime on load
   useEffect(() => {
     if (isPyodideReady()) {
       setIsEngineReady(true);
@@ -100,7 +100,7 @@ export const PaymentForm: React.FC<PaymentFormProps> = ({
         if (isMounted) setIsEngineReady(true);
       })
       .catch((err) => {
-        console.warn('WASM engine background warmup warning:', err);
+        console.warn('WASM background warmup warning:', err);
       });
 
     return () => {
@@ -165,7 +165,6 @@ export const PaymentForm: React.FC<PaymentFormProps> = ({
         if (error) throw error;
 
         const members = (data as OrgMember[]) || [];
-        // Only exclude the active sender wallet, leave all other company officers available
         const eligibleOfficers = members.filter((m) => {
           return m.wallet_address.trim().toUpperCase() !== senderWallet.trim().toUpperCase();
         });
@@ -188,7 +187,7 @@ export const PaymentForm: React.FC<PaymentFormProps> = ({
     resolveOrgAndFetchOfficers();
   }, [orgName, senderWallet]);
 
-  // Client-Side Python WebAssembly (Pyodide) Execution
+  // Client-Side Pyodide Risk Scoring
   useEffect(() => {
     if (!isValidAddress || numericAmount <= 0) {
       setMlScore(null);
@@ -279,12 +278,11 @@ export const PaymentForm: React.FC<PaymentFormProps> = ({
       }
     }
 
-    // Exact public key selected by user
     const effectiveCosigner1 = requiredCoSigners >= 1 ? selectedOfficer1.trim() : '';
     const effectiveCosigner2 = requiredCoSigners === 2 ? selectedOfficer2.trim() : '';
 
-    let officer1Data = getMemberByWallet(effectiveCosigner1);
-    let officer2Data = getMemberByWallet(effectiveCosigner2);
+    const officer1Data = getMemberByWallet(effectiveCosigner1);
+    const officer2Data = getMemberByWallet(effectiveCosigner2);
 
     try {
       setIsSubmitting(true);
@@ -308,7 +306,7 @@ export const PaymentForm: React.FC<PaymentFormProps> = ({
       const observationDelaySeconds = delayMinutes * 60;
       const encodedMemo = `[DELAY:${observationDelaySeconds}] ${purposeNote.trim()}`;
 
-      // Submit the exact selected public key on-chain
+      // Submit on-chain with exact public keys
       const { intentId, txHash } = await ContractClient.createIntent({
         caller: senderWallet,
         recipient: recipient.trim(),
@@ -328,11 +326,19 @@ export const PaymentForm: React.FC<PaymentFormProps> = ({
       if (intentId !== undefined && intentId !== null) {
         const recipientEntityEmail = (recipientOrg as any)?.email || (recipientOrg as any)?.contact_email || 'none';
 
-        // Write the exact public key into cosigner columns to eliminate lookup discrepancies
+        // Direct upfront status assignment: quarantined if risk >= 75, else observing
+        const initialStatus = isHighRisk ? 'quarantined' : 'observing';
+        const initialNote = isHighRisk 
+          ? `[QUARANTINED] ML Score: ${(mlScore || 78).toFixed(2)} | ${mlRationale || 'Anomaly challenge triggered'} | ${encodedMemo}`
+          : (mlScore !== null 
+              ? `ML Risk Score: ${mlScore.toFixed(2)}/100 | ${mlRationale || 'Approved baseline flow'} | ${encodedMemo}` 
+              : encodedMemo);
+
         await supabase
           .from('transactions_testnet')
           .update({
-            note: encodedMemo,
+            status: initialStatus,
+            note: initialNote,
             sender_email: activeTreasurerEmail || 'none',
             receiver_email: recipientEntityEmail,
             cosigner_1_name: effectiveCosigner1 || 'none',

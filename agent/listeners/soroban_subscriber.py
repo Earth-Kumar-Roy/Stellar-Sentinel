@@ -11,7 +11,7 @@ from dispatch.relayer import ChallengeRelayer, AutonomousSettler
 relayer = ChallengeRelayer()
 settler = AutonomousSettler()
 
-PROJECT_EPOCH_OFFSET = 1704067200  # Jan 1, 2024 00:00:00 UTC[cite: 21]
+PROJECT_EPOCH_OFFSET = 1704067200  # Jan 1, 2024 00:00:00 UTC
 
 RPC_ENDPOINTS = [
     settings.STELLAR_RPC_URL,
@@ -70,6 +70,7 @@ class SorobanSubscriber:
                     .select("*") \
                     .eq("status", "observing") \
                     .not_.ilike("note", "%ML Risk Score%") \
+                    .not_.ilike("note", "%[SIGNED:%") \
                     .limit(10) \
                     .execute()
 
@@ -81,7 +82,7 @@ class SorobanSubscriber:
         except Exception:
             pass
 
-        # Check and settle/refund matured intents (including quarantined and >1hr frames)[cite: 21]
+        # Check and settle/refund matured intents
         self.check_and_settle_matured_intents()
 
         if self.last_ledger == 0:
@@ -112,12 +113,9 @@ class SorobanSubscriber:
 
     def check_and_settle_matured_intents(self):
         """
-        Settles intents that have:
-        1. Passed their specific observation timelock (now >= created_epoch + delay_seconds)
-        2. Reached or exceeded 1 Hour (3,600s) from registration.
-        Includes QUARANTINED intents so they automatically trigger contract refunds upon maturity.
-        Dispatches Tax Invoice to Treasurer AND Recipient Entity on execution.
-        Suppresses recipient delivery on cancellation/refund.
+        Settles intents that have passed their observation timelock.
+        If co-signer signatures are satisfied, settles and disburses.
+        Only refunds if on-chain execution dictates or if signatures are missing upon expiry.
         """
         try:
             active = supabase.table("transactions_testnet") \
@@ -137,14 +135,12 @@ class SorobanSubscriber:
                 delay_seconds = self._extract_delay_seconds(item)
                 onchain_id = self.decode_onchain_id(db_intent_id)
 
-                # Condition: Matured per configured delay OR elapsed over 1 hour (3600s)[cite: 21]
                 time_elapsed = now - created_epoch
                 is_delay_matured = now >= (created_epoch + delay_seconds)
                 is_over_one_hour = time_elapsed >= 3600
 
                 if is_delay_matured or is_over_one_hour:
                     status_str = (item.get("status") or "").lower()
-                    is_quarantined = status_str == "quarantined"
 
                     cosigner_1 = item.get("cosigner_1_name") or ""
                     cosigner_2 = item.get("cosigner_2_name") or ""
@@ -158,7 +154,7 @@ class SorobanSubscriber:
                     full_memo = f"{note_str} {desc_str}".upper()
                     co_signer_approved = "[SIGNED:" in full_memo or "CO-SIGNER APPROVED" in full_memo
 
-                    # Resolve sender email if missing from the record[cite: 21]
+                    # Resolve sender email
                     sender_email = item.get("sender_email")
                     if not sender_email or "@" not in str(sender_email):
                         sender_wallet = item.get("from_wallet")
@@ -178,8 +174,11 @@ class SorobanSubscriber:
                         tx_hash = result.get("tx_hash")
                         is_contract_refund = result.get("is_refund", False)
 
-                        # If it was quarantined OR cosigners were required but missing, it is a refund[cite: 21]
-                        is_refund = is_contract_refund or is_quarantined or (has_assigned_cosigners and not co_signer_approved)
+                        # A transaction is ONLY a refund if:
+                        # 1. The on-chain contract emitted a refund event, OR
+                        # 2. Co-signers were required but missing upon timelock expiry, OR
+                        # 3. It was quarantined without any co-signer approval.
+                        is_refund = is_contract_refund or (has_assigned_cosigners and not co_signer_approved) or (status_str == "quarantined" and not co_signer_approved)
                         self.terminal_intents.add(db_intent_id)
 
                         if is_refund:
@@ -191,7 +190,6 @@ class SorobanSubscriber:
                                 "tx_hash": tx_hash
                             }).eq("intent_id", db_intent_id).execute()
 
-                            # Refund notice sent strictly to internal treasury (recipient receives no invoice)[cite: 20]
                             relayer.notify_refund_alert(
                                 intent_id=db_intent_id,
                                 amount=amount_val,
@@ -208,13 +206,11 @@ class SorobanSubscriber:
                                 "note": f"Settled & Disbursed on-chain. Tx: {tx_hash}"
                             }).eq("intent_id", db_intent_id).execute()
 
-                            # Dual-Table Recipient Lookup: organization_members OR organizations[cite: 20]
                             recipient_wallet = (item.get("to_wallet") or item.get("recipient") or "").strip()
                             receiver_email = item.get("receiver_email")
 
                             if not receiver_email and recipient_wallet and recipient_wallet != "none":
                                 try:
-                                    # 1. Check organization_members
                                     rec_lookup = supabase.table("organization_members") \
                                         .select("email") \
                                         .ilike("wallet_address", recipient_wallet) \
@@ -222,7 +218,6 @@ class SorobanSubscriber:
                                     if rec_lookup.data and len(rec_lookup.data) > 0 and rec_lookup.data[0].get("email"):
                                         receiver_email = rec_lookup.data[0]["email"]
 
-                                    # 2. Check organizations entity table
                                     if not receiver_email:
                                         org_lookup = supabase.table("organizations") \
                                             .select("email") \
@@ -289,6 +284,10 @@ class SorobanSubscriber:
         asset_address = tx_record.get("asset_address", "")
         org_name = tx_record.get("org_name", "none")
         existing_note = tx_record.get("note") or ""
+        existing_status = (tx_record.get("status") or "").lower()
+
+        # Check if already approved by co-signer
+        has_signed = "[SIGNED:" in existing_note.upper() or "CO-SIGNER APPROVED" in existing_note.upper()
 
         composite_score, features, rationale, should_challenge = calculate_composite_risk(
             intent_id=db_intent_id,
@@ -306,7 +305,8 @@ class SorobanSubscriber:
 
         preserved_signatures = " ".join([part for part in existing_note.split() if "[SIGNED:" in part])
 
-        if should_challenge:
+        # If a co-signer already approved the intent, DO NOT override status to quarantined!
+        if should_challenge and not has_signed and existing_status != "observing":
             print(f"[Alert] Anomaly detected! Applying DB-Only Quarantine for Intent #{db_intent_id}...")
             quarantine_note = f"[QUARANTINED] ML Score: {composite_score:.2f} | {rationale} {preserved_signatures}".strip()
             
