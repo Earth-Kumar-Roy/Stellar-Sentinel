@@ -26,7 +26,6 @@ interface OngoingIntentsProps {
   currentWallet: string;
   userRole?: string;
   userOrgName?: string;
-  memberStatus?: string;
   onRefresh: () => void;
 }
 
@@ -35,7 +34,6 @@ export const OngoingIntents: React.FC<OngoingIntentsProps> = ({
   currentWallet,
   userRole,
   userOrgName,
-  memberStatus,
   onRefresh,
 }) => {
   const [processingId, setProcessingId] = useState<number | null>(null);
@@ -43,8 +41,52 @@ export const OngoingIntents: React.FC<OngoingIntentsProps> = ({
   const [memberDirectory, setMemberDirectory] = useState<Record<string, string>>({});
   const [orgMemberWallets, setOrgMemberWallets] = useState<Set<string>>(new Set());
 
-  // Security Verification Guard: Only active/approved members can inspect company ongoing queue
-  const isAuthorizedActive = memberStatus === 'active';
+  // Direct live verification of the connected wallet's membership status
+  const [liveStatus, setLiveStatus] = useState<string | null>(null);
+  const [isCheckingStatus, setIsCheckingStatus] = useState<boolean>(true);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    async function verifyWalletStatus() {
+      if (!currentWallet) {
+        if (isMounted) {
+          setLiveStatus(null);
+          setIsCheckingStatus(false);
+        }
+        return;
+      }
+
+      setIsCheckingStatus(true);
+      try {
+        const { data, error } = await supabase
+          .from('organization_members')
+          .select('status, role, org_name')
+          .ilike('wallet_address', currentWallet.trim())
+          .maybeSingle();
+
+        if (!error && data && isMounted) {
+          setLiveStatus(data.status);
+        } else if (isMounted) {
+          setLiveStatus(null);
+        }
+      } catch (err) {
+        console.warn('Could not verify wallet status:', err);
+      } finally {
+        if (isMounted) setIsCheckingStatus(false);
+      }
+    }
+
+    verifyWalletStatus();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [currentWallet]);
+
+  const isTreasurer = userRole?.toLowerCase() === 'treasurer';
+  // Authorize if active in DB, or if user is Treasurer
+  const isAuthorizedActive = liveStatus === 'active' || isTreasurer;
 
   // 1. Fetch organization members to bind full names and identify all wallets belonging to this organization
   useEffect(() => {
@@ -430,7 +472,17 @@ export const OngoingIntents: React.FC<OngoingIntentsProps> = ({
     return addr;
   };
 
-  // ACCESS GUARD: If member is pending or rejected, completely block the queue view
+  // While checking DB, avoid flashing incorrect restrictions
+  if (isCheckingStatus) {
+    return (
+      <div className="bg-[#121620] border border-[#232938] p-12 text-center text-stellar-yellow card-polygon font-mono text-xs">
+        <span className="animate-spin inline-block text-base mr-2">⟳</span>
+        Verifying wallet authorization...
+      </div>
+    );
+  }
+
+  // Access protection: Only displayed if the connected wallet is genuinely pending or unapproved in the database
   if (!isAuthorizedActive) {
     return (
       <div className="bg-[#121620] border border-amber-500/40 p-10 card-polygon text-center space-y-4 my-8 max-w-2xl mx-auto font-mono text-xs">
@@ -442,7 +494,7 @@ export const OngoingIntents: React.FC<OngoingIntentsProps> = ({
           Your registration for <strong className="text-white">{userOrgName || 'Organization'}</strong> has not yet been approved by the company Treasurer.
         </p>
         <div className="bg-[#0B0D13] border border-[#232938] p-3 text-zinc-400 text-[10px]">
-          MEMBERSHIP STATUS: <span className="text-amber-400 font-bold uppercase">{memberStatus || 'PENDING'}</span>
+          MEMBERSHIP STATUS: <span className="text-amber-400 font-bold uppercase">{liveStatus || 'PENDING'}</span>
         </div>
       </div>
     );
@@ -473,7 +525,7 @@ export const OngoingIntents: React.FC<OngoingIntentsProps> = ({
         <div className="bg-[#121620] border border-[#232938] p-12 text-center text-stellar-muted card-polygon">
           <ShieldCheck className="w-8 h-8 text-emerald-400 mx-auto mb-2" />
           <p className="text-white font-bold text-sm mb-1">Queue Empty</p>
-          <p className="text-[11px]">No active disbursements found in observation or awaiting multi-sig consensus for {userOrgName || 'this organization'}.</p>
+          <p className="text-[11px]">No active disbursements found in observation or awaiting multi-sig consensus for {userOrgName || 'this organization'}[cite: 27].</p>
         </div>
       ) : (
         <div className="space-y-4">

@@ -40,11 +40,20 @@ export default function App() {
     refreshOrganization 
   } = useOrganization(walletAddress);
 
-  const { 
-    intents, 
-    quarantinedCount, 
-    refreshTransactions 
-  } = useDualTransactions(walletAddress);
+  const dualTxResult = useDualTransactions(walletAddress);
+  const intents = dualTxResult.intents || [];
+  const quarantinedCount = (dualTxResult as any).quarantinedCount ?? (dualTxResult as any).quarantineCount ?? 0;
+  
+  // Safe resolver ensuring onRefresh is always a valid () => void callable
+  const refreshTransactions = () => {
+    if (typeof (dualTxResult as any).refreshDualTransactions === 'function') {
+      (dualTxResult as any).refreshDualTransactions();
+    } else if (typeof (dualTxResult as any).refreshTransactions === 'function') {
+      (dualTxResult as any).refreshTransactions();
+    } else if (typeof (dualTxResult as any).refresh === 'function') {
+      (dualTxResult as any).refresh();
+    }
+  };
 
   const [currentTab, setCurrentTab] = useState<ActiveTab | 'landing'>('dashboard');
   const [showCredModal, setShowCredModal] = useState(false);

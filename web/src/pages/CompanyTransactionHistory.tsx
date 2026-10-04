@@ -36,8 +36,10 @@ export const CompanyTransactionHistory: React.FC<CompanyTransactionHistoryProps>
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [currentPage, setCurrentPage] = useState<number>(1);
 
-  // Security Verification Guard: Only active members can read corporate ledgers
-  const isAuthorized = Boolean(currentMember && currentMember.status === 'active');
+  // Security Verification Guard: Active members OR Treasurers (founding controllers) are authorized
+  const isAuthorized = Boolean(
+    currentMember && (currentMember.status === 'active' || currentMember.role === 'Treasurer')
+  );
 
   const fetchCompanyHistory = useCallback(async () => {
     if (!isAuthorized) {
@@ -48,12 +50,12 @@ export const CompanyTransactionHistory: React.FC<CompanyTransactionHistoryProps>
 
     setIsLoading(true);
     try {
-      // Strictly query ACTIVE registered members only
+      // Strictly query ACTIVE registered members or the Treasurer
       const { data: membersData, error: membersError } = await supabase
         .from('organization_members')
         .select('wallet_address, full_name, role')
         .ilike('org_name', currentMember.org_name.trim())
-        .eq('status', 'active');
+        .or('status.eq.active,role.eq.Treasurer');
 
       if (membersError) throw membersError;
 
@@ -137,7 +139,7 @@ export const CompanyTransactionHistory: React.FC<CompanyTransactionHistoryProps>
     return filteredTransactions.slice(startIndex, startIndex + PAGE_SIZE);
   }, [filteredTransactions, currentPage]);
 
-  // Render Access Guard if user is not active
+  // Render Access Guard if user is genuinely unauthorized
   if (!isAuthorized) {
     return (
       <div className="bg-[#121620] border border-amber-500/40 p-10 card-polygon text-center space-y-4 my-8 max-w-2xl mx-auto font-mono text-xs">
@@ -456,7 +458,7 @@ export const CompanyTransactionHistory: React.FC<CompanyTransactionHistoryProps>
                       rel="noreferrer"
                       className="text-stellar-muted hover:text-white shrink-0"
                     >
-                      <ExternalLink className="w-3.5 h-3.5" />
+                      <ExternalLink className="w-3 h-3" />
                     </a>
                   )}
                 </div>
@@ -512,7 +514,7 @@ export const CompanyTransactionHistory: React.FC<CompanyTransactionHistoryProps>
                   className="px-4 py-2 bg-stellar-yellow text-black font-bold btn-polygon hover:bg-stellar-gold flex items-center gap-1.5"
                 >
                   <span>VIEW ON STELLAR EXPERT</span>
-                  <ExternalLink className="w-3.5 h-3.5" />
+                  <ExternalLink className="w-3 h-3" />
                 </a>
               )}
             </div>

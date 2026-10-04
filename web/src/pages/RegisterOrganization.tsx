@@ -167,9 +167,12 @@ export const RegisterOrganization: React.FC<RegisterOrganizationProps> = ({
     setIsLoading(true);
     setStatusMessage('Validating passcode and committing identity records...');
 
-    const targetOrg = mode === 'create' ? orgName.trim() : selectedOrg;
-    const assignedRole = mode === 'create' ? 'Treasurer' : role;
-    const memberStatus = mode === 'create' ? 'active' : 'pending';
+    const isCreating = mode === 'create' || Boolean(orgName.trim() && !selectedOrg);
+    const targetOrg = isCreating ? orgName.trim() : selectedOrg;
+    const assignedRole: OrgMember['role'] = isCreating ? 'Treasurer' : role;
+    
+    // CRITICAL FIX: A Treasurer is the founding master controller and MUST ALWAYS be 'active' immediately.
+    const memberStatus: OrgMember['status'] = (isCreating || assignedRole === 'Treasurer') ? 'active' : 'pending';
 
     try {
       const verifyRes = await AppsScriptService.verifyRegistrationOtp(email.trim(), otp.trim());
@@ -189,10 +192,10 @@ export const RegisterOrganization: React.FC<RegisterOrganizationProps> = ({
         email: email.trim().toLowerCase(),
         phone: phone.trim() ? phone.trim() : null,
         role: assignedRole,
-        status: memberStatus,
+        status: memberStatus, // Always 'active' for Treasurer
         password_hash: passwordHash,
         is_verified: true,
-        gst_number: mode === 'create' && gstNumber.trim() ? gstNumber.trim().toUpperCase() : null,
+        gst_number: isCreating && gstNumber.trim() ? gstNumber.trim().toUpperCase() : null,
       };
 
       const { data, error } = await supabase
@@ -205,8 +208,8 @@ export const RegisterOrganization: React.FC<RegisterOrganizationProps> = ({
         throw new Error(`[${error.code || 'DB_ERROR'}] ${error.message}`);
       }
 
-      if (mode === 'create') {
-        alert('Organization registered successfully as Treasurer.');
+      if (assignedRole === 'Treasurer') {
+        alert('Organization registered successfully as Treasurer. Vault access is active.');
       } else {
         alert('Join request submitted successfully. Awaiting Treasurer approval.');
       }
