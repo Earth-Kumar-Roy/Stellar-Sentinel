@@ -56,9 +56,10 @@ export const OrganizationSearch: React.FC<OrganizationSearchProps> = ({
       }
       const { data: orgData } = await orgQuery.order('name', { ascending: true });
 
+      // Fetch non-rejected members so all registered organizations are discovered
       let memQuery = supabase
         .from('organization_members')
-        .select('id, org_name, full_name, role, wallet_address, email, gst_number, is_verified')
+        .select('id, org_name, full_name, role, wallet_address, email, gst_number, is_verified, status')
         .neq('status', 'rejected');
 
       if (query.trim()) {
@@ -84,6 +85,7 @@ export const OrganizationSearch: React.FC<OrganizationSearchProps> = ({
         const key = (mem.org_name || '').trim().toUpperCase();
         if (!key) return;
 
+        // Register the organization entity card
         if (!orgMap[key]) {
           orgMap[key] = {
             org_name: mem.org_name,
@@ -101,13 +103,16 @@ export const OrganizationSearch: React.FC<OrganizationSearchProps> = ({
           orgMap[key].is_verified = true;
         }
 
-        orgMap[key].members.push({
-          id: mem.id,
-          full_name: mem.full_name || 'Designated Member',
-          role: mem.role || 'Member',
-          wallet_address: mem.wallet_address,
-          email: mem.email || ''
-        });
+        // CRITICAL SECURITY GUARD: Only enroll ACTIVE members into the visible personnel list
+        if (mem.status === 'active') {
+          orgMap[key].members.push({
+            id: mem.id,
+            full_name: mem.full_name || 'Designated Member',
+            role: mem.role || 'Member',
+            wallet_address: mem.wallet_address,
+            email: mem.email || ''
+          });
+        }
       });
 
       setOrganizations(Object.values(orgMap));
@@ -142,10 +147,10 @@ export const OrganizationSearch: React.FC<OrganizationSearchProps> = ({
         <div>
           <h1 className="text-xl font-bold text-white tracking-wide flex items-center gap-2">
             <Building2 className="w-5 h-5 text-stellar-yellow" />
-            ORGANIZATION DIRECTORY & DISBURSEMENT SEARCH
+            ORGANIZATION DIRECTORY &amp; DISBURSEMENT SEARCH
           </h1>
           <p className="text-stellar-muted text-[11px] mt-1">
-            Search external verified corporate registries and inspect designated vault rosters.
+            Search external verified corporate registries and inspect designated vault rosters[cite: 24].
           </p>
         </div>
 
@@ -317,12 +322,12 @@ export const OrganizationSearch: React.FC<OrganizationSearchProps> = ({
 
             <div className="space-y-3">
               <span className="text-white font-bold uppercase tracking-wider text-[11px]">
-                Authorized Officers & Receiving Endpoints ({selectedOrg.members.length})
+                Authorized Officers &amp; Receiving Endpoints ({selectedOrg.members.length})
               </span>
 
               {selectedOrg.members.length === 0 ? (
                 <div className="bg-[#0B0D13] p-4 text-center text-stellar-muted border border-[#232938]">
-                  No individual officer profiles bound yet.
+                  No active verified officer profiles available yet.
                   {selectedOrg.wallet_address && isTreasurer && !isSameOrg(selectedOrg.org_name) && !isSelfWallet(selectedOrg.wallet_address) && (
                     <div className="pt-3">
                       <button

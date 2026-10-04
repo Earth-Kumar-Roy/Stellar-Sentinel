@@ -142,6 +142,7 @@ export const PaymentForm: React.FC<PaymentFormProps> = ({
             .from('organization_members')
             .select('org_name, email, role')
             .ilike('wallet_address', senderWallet.trim())
+            .eq('status', 'active')
             .maybeSingle();
 
           if (memberLookup) {
@@ -160,11 +161,12 @@ export const PaymentForm: React.FC<PaymentFormProps> = ({
 
         setResolvedOrgName(targetOrg);
 
+        // Security Patch: Strictly query ACTIVE members so pending applicants cannot be selected as co-signers
         const { data, error } = await supabase
           .from('organization_members')
           .select('*')
           .ilike('org_name', targetOrg.trim())
-          .neq('status', 'rejected')
+          .eq('status', 'active')
           .order('created_at', { ascending: false });
 
         if (error) throw error;
@@ -297,6 +299,7 @@ export const PaymentForm: React.FC<PaymentFormProps> = ({
           .from('organization_members')
           .select('email')
           .ilike('wallet_address', senderWallet.trim())
+          .eq('status', 'active')
           .maybeSingle();
 
         if (directMem?.email && directMem.email.includes('@')) {

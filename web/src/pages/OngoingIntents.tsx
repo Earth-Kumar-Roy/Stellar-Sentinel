@@ -11,7 +11,8 @@ import {
   CheckCircle2, 
   Coins, 
   Loader2, 
-  Undo2 
+  Undo2,
+  ShieldAlert
 } from 'lucide-react';
 import { StatusBadge } from '../components/transactions/StatusBadge';
 import { ContractClient } from '../services/contractClient';
@@ -25,6 +26,7 @@ interface OngoingIntentsProps {
   currentWallet: string;
   userRole?: string;
   userOrgName?: string;
+  memberStatus?: string;
   onRefresh: () => void;
 }
 
@@ -33,6 +35,7 @@ export const OngoingIntents: React.FC<OngoingIntentsProps> = ({
   currentWallet,
   userRole,
   userOrgName,
+  memberStatus,
   onRefresh,
 }) => {
   const [processingId, setProcessingId] = useState<number | null>(null);
@@ -40,13 +43,19 @@ export const OngoingIntents: React.FC<OngoingIntentsProps> = ({
   const [memberDirectory, setMemberDirectory] = useState<Record<string, string>>({});
   const [orgMemberWallets, setOrgMemberWallets] = useState<Set<string>>(new Set());
 
+  // Security Verification Guard: Only active/approved members can inspect company ongoing queue
+  const isAuthorizedActive = memberStatus === 'active';
+
   // 1. Fetch organization members to bind full names and identify all wallets belonging to this organization
   useEffect(() => {
+    if (!isAuthorizedActive) return;
+
     async function loadDirectoryAndOrgWallets() {
       try {
         const { data } = await supabase
           .from('organization_members')
-          .select('full_name, wallet_address, org_name');
+          .select('full_name, wallet_address, org_name')
+          .eq('status', 'active');
 
         if (data && Array.isArray(data)) {
           const mapping: Record<string, string> = {};
@@ -77,11 +86,11 @@ export const OngoingIntents: React.FC<OngoingIntentsProps> = ({
       }
     }
     loadDirectoryAndOrgWallets();
-  }, [userOrgName]);
+  }, [userOrgName, isAuthorizedActive]);
 
   // 2. Multi-Tenant Scoping: Strictly isolate transactions to THIS company
   const activeItems = useMemo(() => {
-    if (!intents || !Array.isArray(intents)) return [];
+    if (!isAuthorizedActive || !intents || !Array.isArray(intents)) return [];
 
     const normUserOrg = (userOrgName || '').trim().toLowerCase();
     const normCurrentWallet = (currentWallet || '').trim().toUpperCase();
@@ -123,7 +132,7 @@ export const OngoingIntents: React.FC<OngoingIntentsProps> = ({
         const timeB = new Date(b.created_at || Date.now()).getTime();
         return timeB - timeA;
       });
-  }, [intents, userOrgName, currentWallet, orgMemberWallets, memberDirectory]);
+  }, [intents, userOrgName, currentWallet, orgMemberWallets, memberDirectory, isAuthorizedActive]);
 
   const parseDelaySeconds = (rawText?: string): number => {
     if (!rawText) return 180;
@@ -168,6 +177,7 @@ export const OngoingIntents: React.FC<OngoingIntentsProps> = ({
           .from('organization_members')
           .select('email')
           .ilike('wallet_address', targetRecipientWallet)
+          .eq('status', 'active')
           .maybeSingle();
 
         if (recMember?.email && recMember.email.includes('@')) {
@@ -197,6 +207,7 @@ export const OngoingIntents: React.FC<OngoingIntentsProps> = ({
         const { data: members } = await supabase
           .from('organization_members')
           .select('wallet_address, full_name, email, org_name, gst_number')
+          .eq('status', 'active')
           .or(`wallet_address.in.(${walletsToLookup.map(w => `"${w}"`).join(',')}),full_name.in.(${walletsToLookup.map(w => `"${w}"`).join(',')})`);
 
         if (members && members.length > 0) {
@@ -418,6 +429,24 @@ export const OngoingIntents: React.FC<OngoingIntentsProps> = ({
     }
     return addr;
   };
+
+  // ACCESS GUARD: If member is pending or rejected, completely block the queue view
+  if (!isAuthorizedActive) {
+    return (
+      <div className="bg-[#121620] border border-amber-500/40 p-10 card-polygon text-center space-y-4 my-8 max-w-2xl mx-auto font-mono text-xs">
+        <ShieldAlert className="w-10 h-10 text-amber-400 mx-auto" />
+        <h2 className="text-base font-bold text-white uppercase tracking-wider">
+          ACCESS RESTRICTED — AUTHORIZATION PENDING
+        </h2>
+        <p className="text-stellar-muted leading-relaxed text-[11px]">
+          Your registration for <strong className="text-white">{userOrgName || 'Organization'}</strong> has not yet been approved by the company Treasurer.
+        </p>
+        <div className="bg-[#0B0D13] border border-[#232938] p-3 text-zinc-400 text-[10px]">
+          MEMBERSHIP STATUS: <span className="text-amber-400 font-bold uppercase">{memberStatus || 'PENDING'}</span>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6 font-mono text-xs">

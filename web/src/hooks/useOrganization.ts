@@ -6,6 +6,8 @@ export interface UseOrganizationReturn {
   member: OrgMember | null;
   isLoading: boolean;
   isRegistered: boolean;
+  isApproved: boolean;
+  isPending: boolean;
   error: string | null;
   refreshOrganization: () => Promise<void>;
 }
@@ -29,7 +31,8 @@ export function useOrganization(walletAddress: string | null): UseOrganizationRe
       const { data, error: dbError } = await supabase
         .from('organization_members')
         .select('*')
-        .eq('wallet_address', walletAddress)
+        .ilike('wallet_address', walletAddress.trim())
+        .neq('status', 'rejected')
         .maybeSingle();
 
       if (dbError) {
@@ -50,10 +53,15 @@ export function useOrganization(walletAddress: string | null): UseOrganizationRe
     fetchOrgDetails();
   }, [fetchOrgDetails]);
 
+  const isActive = member?.status === 'active';
+  const isPending = member?.status === 'pending';
+
   return {
     member,
     isLoading,
     isRegistered: Boolean(member),
+    isApproved: isActive,
+    isPending,
     error,
     refreshOrganization: fetchOrgDetails,
   };

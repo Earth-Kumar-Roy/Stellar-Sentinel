@@ -39,7 +39,9 @@ export const Dashboard: React.FC<DashboardProps> = ({
   onNavigateToQuarantine,
   onRefreshTransactions,
 }) => {
-  const isTreasurer = member.role.toLowerCase() === 'treasurer';
+  // Security Guard: Check if the connected user has an approved, active role
+  const isAuthorizedActive = Boolean(member && member.status === 'active');
+  const isTreasurer = isAuthorizedActive && member.role.toLowerCase() === 'treasurer';
 
   // Metrics aggregation
   const executedIntents = useMemo(() => intents.filter((i) => i.status === 'executed'), [intents]);
@@ -100,6 +102,24 @@ export const Dashboard: React.FC<DashboardProps> = ({
   const recentActivities = useMemo(() => {
     return [...intents].slice(0, 5);
   }, [intents]);
+
+  // Security Access Wall: If member is pending approval or rejected, hide operational data
+  if (!isAuthorizedActive) {
+    return (
+      <div className="bg-[#121620] border border-amber-500/40 p-10 card-polygon text-center space-y-4 my-8 max-w-2xl mx-auto font-mono text-xs">
+        <ShieldAlert className="w-10 h-10 text-amber-400 mx-auto" />
+        <h2 className="text-base font-bold text-white uppercase tracking-wider">
+          ACCESS RESTRICTED — AUTHORIZATION PENDING
+        </h2>
+        <p className="text-stellar-muted leading-relaxed text-[11px]">
+          Your registration for <strong className="text-white">{member?.org_name || 'Organization'}</strong> has not yet been approved by the company Treasurer.
+        </p>
+        <div className="bg-[#0B0D13] border border-[#232938] p-3 text-zinc-400 text-[10px]">
+          MEMBERSHIP STATUS: <span className="text-amber-400 font-bold uppercase">{member?.status || 'PENDING'}</span>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6 font-mono text-xs text-zinc-300 pb-16">

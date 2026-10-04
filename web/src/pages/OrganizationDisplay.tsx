@@ -14,6 +14,7 @@ import {
   Calendar 
 } from 'lucide-react';
 import { supabase } from '../config/supabase';
+import { STELLAR_CONFIG } from '../config/constants';
 import type { OrgMember } from '../types';
 
 interface OrganizationDisplayProps {
@@ -72,21 +73,70 @@ export const OrganizationDisplay: React.FC<OrganizationDisplayProps> = ({ curren
     fetchOrganizationData();
   }, [fetchOrganizationData]);
 
-  const handleUpdateStatus = async (memberId: string, newStatus: 'active' | 'rejected') => {
+  const handleUpdateStatus = async (memberId: string, action: 'approve' | 'reject') => {
     try {
       setActionLoading(memberId);
-      const { error } = await supabase
-        .from('organization_members')
-        .update({ status: newStatus })
-        .eq('id', memberId);
 
-      if (error) throw error;
+      // Locate applicant details before deletion
+      const targetReq = members.find((m) => m.id === memberId);
 
-      alert(`Member request successfully ${newStatus === 'active' ? 'approved' : 'rejected'}.`);
+      if (action === 'reject') {
+        // STEP 1: Dispatch rejection notification email FIRST
+        if (targetReq?.email && targetReq.email.includes('@')) {
+          try {
+            const scriptUrl = 
+              import.meta.env.VITE_APPS_SCRIPT_URL || 
+              (STELLAR_CONFIG as any).APPS_SCRIPT_URL || 
+              '';
+
+            if (scriptUrl) {
+              await fetch(scriptUrl, {
+                method: 'POST',
+                mode: 'no-cors',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  action: 'MEMBER_REJECTED_NOTIFY',
+                  email: targetReq.email.trim(),
+                  fullName: targetReq.full_name,
+                  orgName: targetReq.org_name || orgName || 'Organization',
+                  role: targetReq.role
+                }),
+              });
+            }
+          } catch (mailErr) {
+            console.warn('Apps Script rejection email dispatch error:', mailErr);
+          }
+        }
+
+        // STEP 2: Delete applicant row from database
+        const { data: deletedRows, error } = await supabase
+          .from('organization_members')
+          .delete()
+          .eq('id', memberId)
+          .select();
+
+        if (error) throw error;
+
+        if (!deletedRows || deletedRows.length === 0) {
+          throw new Error('Database permission denied: Please verify the DELETE policy in Supabase.');
+        }
+
+        alert('Member request rejected and removed from roster. Rejection notification email dispatched.');
+      } else {
+        // Approve member: set status to 'active'
+        const { error } = await supabase
+          .from('organization_members')
+          .update({ status: 'active' })
+          .eq('id', memberId);
+
+        if (error) throw error;
+        alert('Member request approved. Authorized role granted.');
+      }
+
       await fetchOrganizationData();
       if (onMemberUpdated) onMemberUpdated();
     } catch (err: unknown) {
-      alert(err instanceof Error ? err.message : 'Failed to update member status');
+      alert(err instanceof Error ? err.message : 'Failed to process member status change');
     } finally {
       setActionLoading(null);
     }
@@ -101,9 +151,9 @@ export const OrganizationDisplay: React.FC<OrganizationDisplayProps> = ({ curren
     currentMember?.role === 'Treasurer' && currentMember?.status === 'active'
   );
 
-  const treasurerMember = members.find((m) => m.role === 'Treasurer' && m.status !== 'rejected');
-  const guardianMember = members.find((m) => m.role === 'Guardian' && m.status !== 'rejected');
-  const signerMember = members.find((m) => m.role === 'Signer' && m.status !== 'rejected');
+  const treasurerMember = members.find((m) => m.role === 'Treasurer' && m.status === 'active');
+  const guardianMember = members.find((m) => m.role === 'Guardian' && m.status === 'active');
+  const signerMember = members.find((m) => m.role === 'Signer' && m.status === 'active');
 
   const pendingRequests = members.filter((m) => m.status === 'pending');
   const verifiedOrg = members.some((m) => m.is_verified);
@@ -118,7 +168,7 @@ export const OrganizationDisplay: React.FC<OrganizationDisplayProps> = ({ curren
           {activeOrgName.toUpperCase()} — TREASURY MANAGEMENT
         </h1>
         <p className="text-stellar-muted text-[11px] mt-1">
-          Direct overview of organizational structure, role capacities, and incoming join approvals[cite: 18]. Click any assigned role to view full member profile.
+          Direct overview of organizational structure, role capacities, and incoming join approvals. Click any assigned role to view the full member profile.
         </p>
       </div>
 
@@ -129,7 +179,7 @@ export const OrganizationDisplay: React.FC<OrganizationDisplayProps> = ({ curren
         </div>
       ) : members.length === 0 ? (
         <div className="bg-[#121620] border border-[#232938] p-12 text-center text-stellar-muted card-polygon">
-          No organization mapping found for your connected wallet[cite: 18].
+          No organization mapping found for your connected wallet.
         </div>
       ) : (
         <div className="space-y-6">
@@ -157,7 +207,7 @@ export const OrganizationDisplay: React.FC<OrganizationDisplayProps> = ({ curren
           {/* Assigned Roles Section (Clickable Cards) */}
           <div className="bg-[#121620] border border-[#232938] p-6 card-polygon space-y-4">
             <h3 className="text-white font-bold uppercase tracking-wider text-xs border-b border-[#232938] pb-2 flex items-center justify-between">
-              <span>Assigned Vault Roles (Max 3)</span>
+              <span>Assigned Vault Roles (Max 3 Active)</span>
               <span className="text-stellar-muted text-[10px]">Click role for member details</span>
             </h3>
 
@@ -177,7 +227,7 @@ export const OrganizationDisplay: React.FC<OrganizationDisplayProps> = ({ curren
                   </span>
                   {treasurerMember ? (
                     <span className="text-[10px] px-2 py-0.5 rounded bg-emerald-950 text-emerald-400 border border-emerald-500/40 font-bold">
-                      {treasurerMember.status.toUpperCase()}
+                      ACTIVE
                     </span>
                   ) : (
                     <span className="text-[10px] text-zinc-500">SLOT EMPTY</span>
@@ -190,7 +240,7 @@ export const OrganizationDisplay: React.FC<OrganizationDisplayProps> = ({ curren
                     <div className="text-stellar-yellow font-mono">{formatAddress(treasurerMember.wallet_address)}</div>
                   </div>
                 ) : (
-                  <p className="text-[10px] text-zinc-500 italic pt-2">No treasurer assigned[cite: 18].</p>
+                  <p className="text-[10px] text-zinc-500 italic pt-2">No active treasurer assigned.</p>
                 )}
               </div>
 
@@ -208,12 +258,8 @@ export const OrganizationDisplay: React.FC<OrganizationDisplayProps> = ({ curren
                     <ShieldCheck className="w-3.5 h-3.5" /> Guardian
                   </span>
                   {guardianMember ? (
-                    <span className={`text-[10px] px-2 py-0.5 rounded font-bold ${
-                      guardianMember.status === 'active' 
-                        ? 'bg-emerald-950 text-emerald-400 border border-emerald-500/40' 
-                        : 'bg-amber-950 text-amber-400 border border-amber-500/40'
-                    }`}>
-                      {guardianMember.status.toUpperCase()}
+                    <span className="text-[10px] px-2 py-0.5 rounded font-bold bg-emerald-950 text-emerald-400 border border-emerald-500/40">
+                      ACTIVE
                     </span>
                   ) : (
                     <span className="text-[10px] text-zinc-500">SLOT EMPTY</span>
@@ -226,7 +272,7 @@ export const OrganizationDisplay: React.FC<OrganizationDisplayProps> = ({ curren
                     <div className="text-stellar-yellow font-mono">{formatAddress(guardianMember.wallet_address)}</div>
                   </div>
                 ) : (
-                  <p className="text-[10px] text-zinc-500 italic pt-2">No guardian assigned[cite: 18].</p>
+                  <p className="text-[10px] text-zinc-500 italic pt-2">No active guardian assigned.</p>
                 )}
               </div>
 
@@ -244,12 +290,8 @@ export const OrganizationDisplay: React.FC<OrganizationDisplayProps> = ({ curren
                     <Key className="w-3.5 h-3.5" /> Signer
                   </span>
                   {signerMember ? (
-                    <span className={`text-[10px] px-2 py-0.5 rounded font-bold ${
-                      signerMember.status === 'active' 
-                        ? 'bg-emerald-950 text-emerald-400 border border-emerald-500/40' 
-                        : 'bg-amber-950 text-amber-400 border border-amber-500/40'
-                    }`}>
-                      {signerMember.status.toUpperCase()}
+                    <span className="text-[10px] px-2 py-0.5 rounded font-bold bg-emerald-950 text-emerald-400 border border-emerald-500/40">
+                      ACTIVE
                     </span>
                   ) : (
                     <span className="text-[10px] text-zinc-500">SLOT EMPTY</span>
@@ -262,7 +304,7 @@ export const OrganizationDisplay: React.FC<OrganizationDisplayProps> = ({ curren
                     <div className="text-stellar-yellow font-mono">{formatAddress(signerMember.wallet_address)}</div>
                   </div>
                 ) : (
-                  <p className="text-[10px] text-zinc-500 italic pt-2">No signer assigned[cite: 18].</p>
+                  <p className="text-[10px] text-zinc-500 italic pt-2">No active signer assigned.</p>
                 )}
               </div>
             </div>
@@ -280,7 +322,7 @@ export const OrganizationDisplay: React.FC<OrganizationDisplayProps> = ({ curren
 
             {pendingRequests.length === 0 ? (
               <div className="bg-[#0B0D13] border border-[#232938] p-6 text-center text-stellar-muted">
-                No pending join requests require your attention at this time[cite: 18].
+                No pending join requests require your attention at this time.
               </div>
             ) : (
               <div className="space-y-3">
@@ -310,15 +352,15 @@ export const OrganizationDisplay: React.FC<OrganizationDisplayProps> = ({ curren
                         <button
                           type="button"
                           disabled={actionLoading === req.id}
-                          onClick={() => handleUpdateStatus(req.id, 'rejected')}
+                          onClick={() => handleUpdateStatus(req.id, 'reject')}
                           className="px-4 py-2 bg-red-950/60 border border-red-800 text-red-300 hover:bg-red-900 rounded text-xs inline-flex items-center gap-1 disabled:opacity-50 font-bold cursor-pointer"
                         >
-                          <X className="w-3.5 h-3.5" /> REJECT
+                          <X className="w-3.5 h-3.5" /> REJECT & DELETE
                         </button>
                         <button
                           type="button"
                           disabled={actionLoading === req.id}
-                          onClick={() => handleUpdateStatus(req.id, 'active')}
+                          onClick={() => handleUpdateStatus(req.id, 'approve')}
                           className="px-4 py-2 bg-emerald-500 text-black font-bold rounded text-xs inline-flex items-center gap-1 hover:bg-emerald-400 disabled:opacity-50 cursor-pointer"
                         >
                           <Check className="w-3.5 h-3.5" /> APPROVE

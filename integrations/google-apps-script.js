@@ -59,6 +59,10 @@ function doPost(e) {
         handleAnomalyRefunded(requestData);
         break;
 
+      case "MEMBER_REJECTED_NOTIFY":
+        handleMemberRejected(requestData);
+        break;
+
       default:
         break;
     }
@@ -92,7 +96,7 @@ function handleSendOtp(data) {
   userProperties.setProperty("OTP_" + email, JSON.stringify(otpPayload));
 
   const htmlBody = `
-    <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; max-width: 620px; margin: 0 auto; padding: 24px; background-color: #07090E; border: 1px solid #1E2433; border-radius: 8px; color: #FFFFFF;">
+    <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; max-width: 620px; margin: 0 auto; padding: 20px; background-color: #07090E; border: 1px solid #1E2433; border-radius: 8px; color: #FFFFFF;">
       <div style="background-color: #0D1017; padding: 20px; border-radius: 6px; text-align: center; border-bottom: 2px solid #FFD700;">
         <h2 style="color: #FFD700; margin: 0; font-size: 20px; letter-spacing: 1.5px; font-family: monospace;">STELLAR SENTINEL PROTOCOL</h2>
         <p style="color: #8A94A6; margin: 6px 0 0 0; font-size: 11px; text-transform: uppercase; letter-spacing: 1px;">Treasury Identity & Organization Binding Relay</p>
@@ -162,7 +166,7 @@ function handleIntentCreated(data) {
     : "Clean";
 
   const htmlBody = `
-    <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; max-width: 640px; margin: 0 auto; padding: 24px; background-color: #07090E; border: 1px solid #1E2433; border-radius: 8px; color: #FFFFFF;">
+    <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; max-width: 640px; margin: 0 auto; padding: 20px; background-color: #07090E; border: 1px solid #1E2433; border-radius: 8px; color: #FFFFFF;">
       <div style="background-color: #0D1017; padding: 20px; border-radius: 6px; border-bottom: 2px solid #FFD700;">
         <h2 style="color: #FFD700; margin: 0; font-size: 18px; letter-spacing: 1px; font-family: monospace;">PAYMENT INTENT REGISTERED</h2>
         <p style="color: #8A94A6; margin: 4px 0 0 0; font-size: 11px; text-transform: uppercase;">Observation Escrow Initialized</p>
@@ -238,7 +242,7 @@ function handleCosignerMandated(data) {
   const mandateReason = data.reason || "Autonomous ML anomaly detection or high-exposure volume threshold";
 
   const htmlBody = `
-    <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; max-width: 640px; margin: 0 auto; padding: 24px; background-color: #07090E; border: 1px solid #EF4444; border-radius: 8px; color: #FFFFFF;">
+    <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; max-width: 640px; margin: 0 auto; padding: 20px; background-color: #07090E; border: 1px solid #EF4444; border-radius: 8px; color: #FFFFFF;">
       <div style="background-color: #1A0F12; padding: 20px; border-radius: 6px; border-bottom: 2px solid #EF4444;">
         <h2 style="color: #EF4444; margin: 0; font-size: 18px; letter-spacing: 1px; font-family: monospace;">ACTION REQUIRED: CO-SIGNER MANDATE</h2>
         <p style="color: #FCA5A5; margin: 4px 0 0 0; font-size: 11px; text-transform: uppercase;">Multi-Sig Authorization Required</p>
@@ -286,16 +290,15 @@ function handleCosignerMandated(data) {
 }
 
 // -----------------------------------------------------------------------------
-// 4. Final Settlement & Tax Invoice (With Attached PDF File)
+// 4. Final Settlement & Tax Invoice (Mobile-Responsive Header & Clean Badges)
 // -----------------------------------------------------------------------------
 function handleFundsReleasedWithInvoice(data) {
-  // Collect Disbursing Treasurer, Co-signers, and Destination Entity Email
   const recipients = collectValidEmails([
     data.treasurer_email,
     data.sender_email,
     data.email,
-    data.receiver_email,      // Recipient entity email
-    data.recipient_email,     // Secondary alias
+    data.receiver_email,
+    data.recipient_email,
     data.cosigner_1_email,
     data.cosigner_2_email
   ]);
@@ -314,18 +317,20 @@ function handleFundsReleasedWithInvoice(data) {
   const numericAmount = parseFloat(String(amount)) || 0;
   const normalizedXlm = asset === "USDC" ? numericAmount * 5.0 : asset === "EURC" ? numericAmount * 5.55 : numericAmount;
 
-  // Build the inline corporate HTML email body
+  // Fully Mobile-Responsive Corporate HTML Body (Clean flex-like table layout)
   const htmlBody = `
-    <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; max-width: 680px; margin: 0 auto; padding: 24px; background-color: #07090E; border: 1px solid #1E2433; border-radius: 8px; color: #FFFFFF;">
-      <div style="background-color: #0D1017; padding: 24px; border-radius: 6px; border-bottom: 2px solid #10B981;">
+    <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; max-width: 680px; margin: 0 auto; padding: 16px; background-color: #07090E; border: 1px solid #1E2433; border-radius: 8px; color: #FFFFFF;">
+      
+      <!-- Mobile-Safe Header Card -->
+      <div style="background-color: #0D1017; padding: 20px 16px; border-radius: 6px; border-bottom: 2px solid #10B981;">
         <table style="width: 100%; border-collapse: collapse;">
           <tr>
-            <td>
-              <h2 style="color: #10B981; margin: 0; font-size: 20px; font-family: monospace; letter-spacing: 1px;">CORPORATE TAX INVOICE</h2>
+            <td style="vertical-align: middle;">
+              <h2 style="color: #10B981; margin: 0; font-size: 18px; font-family: monospace; letter-spacing: 1px; font-weight: bold;">CORPORATE TAX INVOICE</h2>
               <p style="color: #8A94A6; margin: 4px 0 0 0; font-size: 11px; text-transform: uppercase;">Official On-Chain Settlement Receipt</p>
             </td>
-            <td style="text-align: right; vertical-align: top;">
-              <span style="background-color: #052E16; color: #10B981; border: 1px solid #10B981; padding: 6px 12px; font-size: 11px; font-weight: bold; border-radius: 4px; font-family: monospace;">
+            <td style="text-align: right; vertical-align: middle; white-space: nowrap; padding-left: 10px;">
+              <span style="background-color: #052E16; color: #10B981; border: 1px solid #10B981; padding: 6px 12px; font-size: 10px; font-weight: 800; border-radius: 4px; font-family: monospace; display: inline-block; letter-spacing: 0.5px; white-space: nowrap;">
                 SETTLED ON-CHAIN
               </span>
             </td>
@@ -333,30 +338,30 @@ function handleFundsReleasedWithInvoice(data) {
         </table>
       </div>
 
-      <div style="padding: 24px 0;">
+      <div style="padding: 20px 0;">
         <table style="width: 100%; border-collapse: collapse; margin-bottom: 20px; font-size: 12px; font-family: monospace;">
           <tr>
-            <td style="vertical-align: top; width: 50%;">
+            <td style="vertical-align: top; width: 50%; padding-right: 8px;">
               <span style="color: #64748B; font-size: 10px; text-transform: uppercase; display: block; margin-bottom: 4px;">Disbursing Entity:</span>
-              <strong style="font-size: 15px; color: #FFFFFF; font-family: sans-serif;">${orgName}</strong><br/>
-              <span style="color: #8A94A6;">GSTIN / Tax ID: <strong style="color: #FFFFFF;">${gstNumber}</strong></span><br/>
+              <strong style="font-size: 14px; color: #FFFFFF; font-family: sans-serif;">${orgName}</strong><br/>
+              <span style="color: #8A94A6;">GSTIN: <strong style="color: #FFFFFF;">${gstNumber}</strong></span><br/>
               <span style="color: #8A94A6;">Protocol: <strong style="color: #FFD700;">Soroban Smart Escrow</strong></span>
             </td>
-            <td style="vertical-align: top; text-align: right; width: 50%;">
+            <td style="vertical-align: top; text-align: right; width: 50%; padding-left: 8px;">
               <span style="color: #64748B; font-size: 10px; text-transform: uppercase; display: block; margin-bottom: 4px;">Settlement Metadata:</span>
-              <span style="color: #FFD700; font-size: 13px; font-weight: bold;">INVOICE REF: #${intentId}</span><br/>
+              <span style="color: #FFD700; font-size: 12px; font-weight: bold;">INVOICE REF: #${intentId}</span><br/>
               <span style="color: #8A94A6;">Settled: ${dateStr}</span><br/>
               <span style="color: #8A94A6;">Status: <strong style="color: #10B981;">EXECUTED (FINAL)</strong></span>
             </td>
           </tr>
         </table>
 
-        <div style="background-color: #0D1017; border: 1px solid #1E2433; border-radius: 6px; padding: 14px; margin-bottom: 20px; font-family: monospace; font-size: 11px;">
+        <div style="background-color: #0D1017; border: 1px solid #1E2433; border-radius: 6px; padding: 12px; margin-bottom: 18px; font-family: monospace; font-size: 11px;">
           <div style="color: #64748B; font-size: 10px; text-transform: uppercase; margin-bottom: 4px;">Destination Settlement Endpoint:</div>
           <div style="color: #FFD700; word-break: break-all;">${recipientAddr}</div>
         </div>
 
-        <div style="border: 1px solid #1E2433; border-radius: 6px; overflow: hidden; margin-bottom: 20px;">
+        <div style="border: 1px solid #1E2433; border-radius: 6px; overflow: hidden; margin-bottom: 18px;">
           <table style="width: 100%; border-collapse: collapse; font-size: 12px; text-align: left;">
             <thead style="background-color: #0D1017; color: #8A94A6; font-size: 11px; text-transform: uppercase; font-family: monospace;">
               <tr style="border-bottom: 1px solid #1E2433;">
@@ -371,7 +376,7 @@ function handleFundsReleasedWithInvoice(data) {
                   <strong style="color: #FFFFFF; font-size: 13px;">Corporate Settlement #${intentId}</strong>
                   <div style="color: #8A94A6; font-size: 11px; margin-top: 4px;">Memo: "${data.note || "Verified Treasury Disbursement"}"</div>
                 </td>
-                <td style="padding: 14px; text-align: center; color: #8A94A6; font-family: monospace;">Matured (Cleared)</td>
+                <td style="padding: 14px; text-align: center; color: #8A94A6; font-family: monospace;">Matured</td>
                 <td style="padding: 14px; text-align: right;">
                   <div style="font-size: 16px; font-weight: bold; color: #10B981; font-family: monospace;">${numericAmount.toFixed(2)} ${asset}</div>
                   <div style="font-size: 10px; color: #64748B; font-family: monospace; margin-top: 2px;">≈ ${normalizedXlm.toFixed(1)} XLM EQ</div>
@@ -381,7 +386,7 @@ function handleFundsReleasedWithInvoice(data) {
           </table>
         </div>
 
-        <div style="background-color: #05070A; border: 1px solid #161B26; border-radius: 6px; padding: 14px; font-family: monospace; font-size: 11px; margin-bottom: 16px;">
+        <div style="background-color: #05070A; border: 1px solid #161B26; border-radius: 6px; padding: 12px; font-family: monospace; font-size: 11px; margin-bottom: 16px;">
           <span style="color: #64748B; font-size: 10px; text-transform: uppercase; display: block; margin-bottom: 4px;">Stellar Network Transaction Hash:</span>
           <span style="color: #FFD700; word-break: break-all;">${txHash}</span>
         </div>
@@ -397,7 +402,7 @@ function handleFundsReleasedWithInvoice(data) {
     </div>
   `;
 
-  // Build the printable A4 HTML Document for conversion to an actual PDF Attachment
+  // Standard Printable PDF Receipt Attachment
   const pdfHtml = `
     <!DOCTYPE html>
     <html>
@@ -491,7 +496,6 @@ function handleFundsReleasedWithInvoice(data) {
     </html>
   `;
 
-  // Convert HTML directly into an attached PDF Blob
   var attachments = [];
   try {
     var pdfBlob = Utilities.newBlob(pdfHtml, "text/html", "invoice.html")
@@ -512,10 +516,9 @@ function handleFundsReleasedWithInvoice(data) {
 }
 
 // -----------------------------------------------------------------------------
-// 5. Intent Cancelled & Auto-Refunded (Dispatched strictly to internal treasury)
+// 5. Intent Cancelled & Auto-Refunded
 // -----------------------------------------------------------------------------
 function handleAnomalyRefunded(data) {
-  // Only internal treasury and co-signers get refund alerts; recipient is NOT sent an invoice
   const recipients = collectValidEmails([
     data.treasurer_email,
     data.sender_email,
@@ -532,7 +535,7 @@ function handleAnomalyRefunded(data) {
   const reason = data.reason || "Cancelled or rejected by authorized key";
 
   const htmlBody = `
-    <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; max-width: 640px; margin: 0 auto; padding: 24px; background-color: #07090E; border: 1px solid #F59E0B; border-radius: 8px; color: #FFFFFF;">
+    <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; max-width: 640px; margin: 0 auto; padding: 20px; background-color: #07090E; border: 1px solid #F59E0B; border-radius: 8px; color: #FFFFFF;">
       <div style="background-color: #171208; padding: 20px; border-radius: 6px; border-bottom: 2px solid #F59E0B;">
         <h2 style="color: #F59E0B; margin: 0; font-size: 18px; letter-spacing: 1px; font-family: monospace;">ESCROW FUNDS AUTO-REFUNDED</h2>
         <p style="color: #FDE68A; margin: 4px 0 0 0; font-size: 11px; text-transform: uppercase;">Intent Cancelled & Escrow Restored</p>
@@ -567,6 +570,48 @@ function handleAnomalyRefunded(data) {
   MailApp.sendEmail({
     to: recipients.join(","),
     subject: `[Refund Confirmed] Escrow Returned: Intent #${intentId}`,
+    name: SENDER_NAME,
+    htmlBody: htmlBody
+  });
+}
+
+// -----------------------------------------------------------------------------
+// 6. Member Request Rejected Notification
+// -----------------------------------------------------------------------------
+function handleMemberRejected(data) {
+  const email = (data.email || "").toString().trim().toLowerCase();
+  const fullName = data.fullName || "Applicant";
+  const orgName = data.orgName || "Enterprise Vault";
+  const role = data.role || "Officer";
+
+  if (!email || email.indexOf("@") === -1) return;
+
+  const htmlBody = `
+    <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; max-width: 620px; margin: 0 auto; padding: 20px; background-color: #07090E; border: 1px solid #EF4444; border-radius: 8px; color: #FFFFFF;">
+      <div style="background-color: #1A0F12; padding: 20px; border-radius: 6px; text-align: center; border-bottom: 2px solid #EF4444;">
+        <h2 style="color: #EF4444; margin: 0; font-size: 20px; letter-spacing: 1.5px; font-family: monospace;">MEMBERSHIP REQUEST DECLINED</h2>
+        <p style="color: #FCA5A5; margin: 6px 0 0 0; font-size: 11px; text-transform: uppercase; letter-spacing: 1px;">Stellar Sentinel Treasury Identity Service</p>
+      </div>
+      <div style="padding: 24px 8px;">
+        <p style="font-size: 15px; color: #FFFFFF; margin: 0 0 12px 0;">Hello <strong>${fullName}</strong>,</p>
+        <p style="font-size: 13px; color: #8A94A6; line-height: 1.6; margin: 0 0 16px 0;">
+          Your request to join <strong>${orgName}</strong> as a designated <strong>${role}</strong> was reviewed and declined by the active organization Treasurer.
+        </p>
+        <div style="background-color: #121620; border: 1px solid #232938; border-radius: 6px; padding: 14px; margin-bottom: 16px;">
+          <p style="font-size: 12px; color: #CBD5E1; margin: 0; line-height: 1.5;">
+            Your previous registration record has been cleared from the registry. You are free to re-apply with revised credentials or connect an alternate wallet address if needed.
+          </p>
+        </div>
+      </div>
+      <div style="border-top: 1px solid #1E2433; padding-top: 14px; font-size: 11px; color: #64748B; text-align: center; font-family: monospace;">
+        Stellar Sentinel Autonomous Multi-Sig Treasury Defense
+      </div>
+    </div>
+  `;
+
+  MailApp.sendEmail({
+    to: email,
+    subject: `[Sentinel] Join Request Update for ${orgName}`,
     name: SENDER_NAME,
     htmlBody: htmlBody
   });

@@ -20,15 +20,29 @@ if ! command -v stellar &> /dev/null; then
   exit 1
 fi
 
-WASM_PATH="${CONTRACTS_DIR}/target/wasm32v1-none/release/sentinel_treasury.optimized.wasm"
-if [ ! -f "${WASM_PATH}" ]; then
-  WASM_PATH="${CONTRACTS_DIR}/target/wasm32v1-none/release/sentinel_treasury.wasm"
-fi
+# Multi-path search for optimized or raw WASM
+CANDIDATE_PATHS=(
+  "${CONTRACTS_DIR}/target/wasm32-unknown-unknown/release/sentinel_treasury.optimized.wasm"
+  "${CONTRACTS_DIR}/target/wasm32-unknown-unknown/release/sentinel_treasury.wasm"
+  "${CONTRACTS_DIR}/target/wasm32v1-none/release/sentinel_treasury.optimized.wasm"
+  "${CONTRACTS_DIR}/target/wasm32v1-none/release/sentinel_treasury.wasm"
+)
 
-if [ ! -f "${WASM_PATH}" ]; then
-  echo "[-] WASM artifact not found. Run ./scripts/build_low_ram.sh first."
+WASM_PATH=""
+for path in "${CANDIDATE_PATHS[@]}"; do
+  if [ -f "${path}" ]; then
+    WASM_PATH="${path}"
+    break
+  fi
+done
+
+if [ -z "${WASM_PATH}" ]; then
+  echo "[-] WASM artifact not found in target directories."
+  echo "[-] Run ./scripts/build_low_ram.sh first."
   exit 1
 fi
+
+echo "[+] Using WASM file: ${WASM_PATH}"
 
 echo "Fetching account addresses..."
 ADMIN_ADDR=$(stellar keys address "${ADMIN_ALIAS}")
@@ -48,7 +62,7 @@ echo "[+] Contract Deployed Successfully!"
 echo "Contract ID: ${CONTRACT_ID}"
 echo "=========================================="
 
-# Create temporary parameter files for initialization
+# Create temporary configuration payloads for initialization
 POLICY_FILE=$(mktemp)
 SIGNERS_FILE=$(mktemp)
 AGENTS_FILE=$(mktemp)

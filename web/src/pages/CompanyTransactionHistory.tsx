@@ -11,7 +11,8 @@ import {
   FileText,
   Search,
   ChevronLeft,
-  ChevronRight
+  ChevronRight,
+  ShieldAlert
 } from 'lucide-react';
 import { StatusBadge } from '../components/transactions/StatusBadge';
 import { resolveTokenByAddress } from '../config/constants';
@@ -35,13 +36,24 @@ export const CompanyTransactionHistory: React.FC<CompanyTransactionHistoryProps>
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [currentPage, setCurrentPage] = useState<number>(1);
 
+  // Security Verification Guard: Only active members can read corporate ledgers
+  const isAuthorized = Boolean(currentMember && currentMember.status === 'active');
+
   const fetchCompanyHistory = useCallback(async () => {
+    if (!isAuthorized) {
+      setIsLoading(false);
+      setTransactions([]);
+      return;
+    }
+
     setIsLoading(true);
     try {
+      // Strictly query ACTIVE registered members only
       const { data: membersData, error: membersError } = await supabase
         .from('organization_members')
         .select('wallet_address, full_name, role')
-        .ilike('org_name', currentMember.org_name.trim());
+        .ilike('org_name', currentMember.org_name.trim())
+        .eq('status', 'active');
 
       if (membersError) throw membersError;
 
@@ -70,7 +82,7 @@ export const CompanyTransactionHistory: React.FC<CompanyTransactionHistoryProps>
     } finally {
       setIsLoading(false);
     }
-  }, [currentMember.org_name]);
+  }, [currentMember.org_name, isAuthorized]);
 
   useEffect(() => {
     fetchCompanyHistory();
@@ -124,6 +136,24 @@ export const CompanyTransactionHistory: React.FC<CompanyTransactionHistoryProps>
     const startIndex = (currentPage - 1) * PAGE_SIZE;
     return filteredTransactions.slice(startIndex, startIndex + PAGE_SIZE);
   }, [filteredTransactions, currentPage]);
+
+  // Render Access Guard if user is not active
+  if (!isAuthorized) {
+    return (
+      <div className="bg-[#121620] border border-amber-500/40 p-10 card-polygon text-center space-y-4 my-8 max-w-2xl mx-auto font-mono text-xs">
+        <ShieldAlert className="w-10 h-10 text-amber-400 mx-auto" />
+        <h2 className="text-base font-bold text-white uppercase tracking-wider">
+          ACCESS RESTRICTED — AUTHORIZATION PENDING
+        </h2>
+        <p className="text-stellar-muted leading-relaxed text-[11px]">
+          Your membership for <strong className="text-white">{currentMember?.org_name || 'Organization'}</strong> has not yet been approved by the designated Treasurer.
+        </p>
+        <div className="bg-[#0B0D13] border border-[#232938] p-3 text-zinc-400 text-[10px]">
+          STATUS: <span className="text-amber-400 font-bold uppercase">{currentMember?.status || 'PENDING'}</span>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6 font-mono text-xs max-w-6xl mx-auto">

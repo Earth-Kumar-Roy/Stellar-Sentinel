@@ -98,10 +98,18 @@ export const RegisterOrganization: React.FC<RegisterOrganizationProps> = ({
     setStatusMessage('Checking credential availability...');
 
     try {
-      // 1. Pre-check uniqueness of Email and Wallet Address in Supabase
+      // 1. Delete any previous rejected records for this wallet or email so the user can re-apply cleanly
+      await supabase
+        .from('organization_members')
+        .delete()
+        .eq('status', 'rejected')
+        .or(`email.eq.${email.trim().toLowerCase()},wallet_address.eq.${wallet.trim()}`);
+
+      // 2. Pre-check uniqueness against active/pending members in Supabase
       const { data: existingMembers, error: checkError } = await supabase
         .from('organization_members')
-        .select('email, wallet_address')
+        .select('email, wallet_address, status')
+        .neq('status', 'rejected')
         .or(`email.eq.${email.trim().toLowerCase()},wallet_address.eq.${wallet.trim()}`);
 
       if (checkError) throw checkError;
@@ -111,30 +119,30 @@ export const RegisterOrganization: React.FC<RegisterOrganizationProps> = ({
         const matchedWallet = existingMembers.some((m) => m.wallet_address === wallet.trim());
 
         if (matchedEmail && matchedWallet) {
-          alert('Both this Corporate Email and Stellar Wallet Address are already registered in the system.');
+          alert('Both this Corporate Email and Stellar Wallet Address are already bound to an active or pending membership.');
         } else if (matchedEmail) {
-          alert('This Corporate Email is already registered with an existing organization account.');
+          alert('This Corporate Email is already registered with an active or pending account.');
         } else {
-          alert('This Stellar Wallet Address is already bound to an organization profile.');
+          alert('This Stellar Wallet Address is already registered with an active or pending profile.');
         }
         setIsLoading(false);
         setStatusMessage(null);
         return;
       }
 
-      // 2. If joining an existing org, make sure the specific role isn't already taken
+      // 3. If joining an existing org, make sure the role is not already claimed
       if (mode === 'join') {
         const { data: roleCheck, error: roleError } = await supabase
           .from('organization_members')
           .select('role')
-          .eq('org_name', targetOrg)
+          .ilike('org_name', targetOrg)
           .eq('role', role)
           .neq('status', 'rejected');
 
         if (roleError) throw roleError;
 
         if (roleCheck && roleCheck.length > 0) {
-          alert(`The role of "${role}" is already filled for ${targetOrg}. Each organization can only have one Treasurer, one Guardian, and one Signer.`);
+          alert(`The role of "${role}" is already taken for ${targetOrg}. Each organization can only have one Treasurer, one Guardian, and one Signer.`);
           setIsLoading(false);
           setStatusMessage(null);
           return;
@@ -161,7 +169,7 @@ export const RegisterOrganization: React.FC<RegisterOrganizationProps> = ({
 
     const targetOrg = mode === 'create' ? orgName.trim() : selectedOrg;
     const assignedRole = mode === 'create' ? 'Treasurer' : role;
-    const memberStatus = mode === 'create' ? 'active' : 'pending'; // Treasurers active immediately; others need approval
+    const memberStatus = mode === 'create' ? 'active' : 'pending';
 
     try {
       const verifyRes = await AppsScriptService.verifyRegistrationOtp(email.trim(), otp.trim());
