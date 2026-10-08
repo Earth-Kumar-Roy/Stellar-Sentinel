@@ -1,0 +1,14 @@
+## 📄 License
+
+**MIT License — Copyright (c) 2026 Stellar Sentinel Protocol, Architected by Earth Kumar Roy**
+
+This project is licensed under the MIT License — see the [LICENSE](./LICENSE) file for details.
+
+### Deployment Notice
+> Currently deployed on **Stellar Soroban TestNet** only (`CDYQLHZ3KBXVJVC5LGGXJTXXBEIA4BGZHLJKZ3JY2FA4FEGURT7YZ3C2`) — **mainnet launch coming soon after community feedback**. Do not use with real funds until independently audited.
+
+**Key points:**
+- Non-custodial: private keys never leave Freighter extension
+- Smart contracts enforce `require_auth()`, time-lock (2h-12h), multi-sig, RLS on `organization_members`
+- No warranty — experimental treasury defense tooling, not financial/tax advice
+- Third-party trademarks (Stellar, Soroban, Vercel, Render, Supabase, etc.) remain with their owners
