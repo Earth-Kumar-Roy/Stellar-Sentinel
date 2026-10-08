@@ -326,6 +326,9 @@ Sentinel natively supports Stellar Lumens and fiat-backed stablecoins via the St
 | 🧠 **Off-chain ML normalization** | Used as-is | Converted to an XLM-equivalent: **1 USDC = 5.0 XLM**, **1 EURC = 5.55 XLM** |
 | 🚦 **ML high-value cap** | Above 5,000 XLM forces quarantine | Above **1,000 USDC** or **900 EURC** (about 5,000 XLM-equivalent) forces quarantine |
 
+> [!NOTE]
+> The contract itself only enforces the 5,000 / 10,000 bands for native XLM. The payment form in the dApp, however, applies the same bands to the **XLM-equivalent** value of any asset (above 5,000 XLM-equivalent it asks for 1 co-signer, above 10,000 it asks for 2), so large stablecoin payments are also routed to co-signers from the UI. When 2 co-signers are required, the second one is also bound as the intent's guardian.
+
 <details>
 <summary><b>💻 Token configuration in the web app (TypeScript)</b></summary>
 
@@ -415,14 +418,16 @@ pub struct PaymentIntent {
 
 | Status | Meaning | Set By |
 |:--|:--|:--|
+| 🟠 `Pending` | Intent has been recorded but is not yet screened or active. It counts as an active record in the ML trust history | Database ledger (`transactions_testnet`) |
 | 🟡 `AwaitingApproval` | Co-signer (and guardian) approvals still outstanding | `create_intent` for `StandardObserving` and `GuardianRequired` tiers |
 | 🔵 `Observing` | Time-lock is running and approvals (if any) are satisfied | `create_intent` for `FastPath`, or `approve_intent` / `approve_guardian` / `resolve_challenge` once approvals are met |
-| 🔴 `Quarantined` | Challenged by the ML agent. Cannot execute until the guardian resolves it | `challenge_intent` |
+| 🔴 `Quarantined` | Flagged by the ML agent (score 75 or above). Cannot execute until a co-signer approves or the guardian resolves it | `challenge_intent` on-chain, or the keeper's database quarantine |
 | 🟢 `Executed` | Tokens disbursed to the recipient | `execute_intent` |
 | ⚫ `Cancelled` | Escrow refunded to the sender (manual cancel, missing approvals, TTL expiry, or rejected challenge) | `cancel_intent`, `execute_intent`, `resolve_challenge` |
+| 🟤 `Rejected` | Declined by an approving officer. Funds are returned to the treasury and the record is excluded from ML baselines | Database ledger and approval dashboards |
 
 > [!NOTE]
-> `types.rs` also reserves `Requested`, `PolicyRejected`, `FastPath`, `Challenged`, `Executable`, and `Expired` status values for future use. The current contract does not assign them. An expired intent is refunded and recorded as `Cancelled`.
+> `types.rs` also reserves `Requested`, `PolicyRejected`, `FastPath`, `Challenged`, `Executable`, and `Expired` status values for future use. The current contract does not assign them. An expired intent is refunded and recorded as `Cancelled`. `Pending` and `Rejected` are tracked in the off-chain database ledger and shown in the dashboards.
 
 ### 🔑 Key Contract Interfaces
 
@@ -525,10 +530,9 @@ The timelock provides a security buffer. The clock starts when the intent is cre
 |:--|:--|:--|:--|
 | ⚡ **Fast Settle** | **2 hours, fixed** | 7,200 s | Production UI |
 | 🎚️ **Flexible** | **3 to 12 hours, standard 6 hours** | 10,800 to 43,200 s (default 21,600 s) | Production UI, with an interactive stepper slider |
-| 🧪 **Testing window** | **3 to 120 minutes** | 180 to 7,200 s | Test runs only, not offered in the UI |
 
 > [!NOTE]
-> The contract enforces one absolute range: `MIN_OBSERVATION_DELAY` = 180 s (3 minutes) and `MAX_OBSERVATION_DELAY` = 43,200 s (12 hours). Values outside it fail with `InvalidIntentParameters` (#12). The 3 to 120 minute testing window exists so the lifecycle can be exercised quickly on testnet. End users only see Fast Settle (2h fixed) and Flexible (3h to 12h, standard 6h).
+> The contract enforces one absolute range: `MIN_OBSERVATION_DELAY` = 180 s (3 minutes) and `MAX_OBSERVATION_DELAY` = 43,200 s (12 hours). Values outside it fail with `InvalidIntentParameters` (#12). End users only see Fast Settle (2h fixed) and Flexible (3h to 12h, standard 6h).
 
 | ML Risk Score | Tier Identification | Quorum Mandate | Observation Policy |
 |:--|:--|:--|:--|
@@ -618,7 +622,7 @@ Standard contract errors defined in `errors.rs` and returned by Soroban simulati
 
 ## 🧠 AI and ML Layer
 
-Every payment intent is ingested by an autonomous Python machine learning telemetry pipeline (`risk_scorer.py`). The engine combines an Isolation Forest anomaly model with a rule engine that evaluates four primary dimensions to detect corporate exfiltration and anomalous transfers.
+Every payment intent is ingested by an autonomous Python machine learning telemetry pipeline (`risk_scorer.py`). The engine combines an Isolation Forest anomaly model with a rule engine that evaluates four primary dimensions, plus supplementary guardrails, to detect corporate exfiltration and anomalous transfers.
 
 ### 🗺️ Where the AI Runs
 
@@ -632,30 +636,41 @@ Every payment intent is ingested by an autonomous Python machine learning teleme
 
 | # | Dimension | What It Checks | Trigger and Effect |
 |:-:|:--|:--|:--|
-| **1** | 🌊 **Global Treasury Entropy Anomaly** | Calculates the moving baseline of the treasury's last **25** executed transfers. | A volume spike of **30x or more** over the baseline (and at least 150 XLM-equivalent) triggers a **+50 penalty** with a floor of 80, and mandates multi-sig approval. |
-| **2** | 🔁 **Post-Cosign Frequency Clustering** | Checks clustering in the last **12** disbursements. | If **9 or more out of 12** transfers are routed to the same wallet without co-signer validation, the engine flags a **+48 anomaly penalty** with a floor of 78. |
-| **3** | 🏢 **GST Corporate Registry & Wallet Trust** | Cross-references the counterparty against verified GST organizations. | Verified entities receive trusted operational status, while independent wallets mandate co-signers on transfer **#2**. |
-| **4** | 📈 **Relative Counterparty Volume Surge** | Tracks the recipient's historical **8-transfer** average and highest endorsed amount (needs at least 2 past transfers). | If the current amount spikes **25x or higher** over the historical baseline (and at least 250 XLM-equivalent), or **35x or higher** on its own, it forces an automated quarantine (**+45**, floor 78). |
+| **1** | 🌊 **Global Treasury Entropy Anomaly** | Calculates the moving baseline of the treasury's last **15** non-cancelled, non-rejected transfers. | A volume spike of **25x or more** over the baseline (and at least 150 XLM-equivalent) triggers a **+50 penalty** with a floor of about 79, and mandates multi-sig approval. |
+| **2** | 🔁 **Post-Cosign Frequency Clustering** | Checks clustering in the last **12** disbursements made after the latest co-signer endorsement. | If **8 or more out of 12** transfers are routed to the same wallet without co-signer validation, the engine flags a **+48 anomaly penalty** with a floor of about 77.5. |
+| **3** | 🏢 **GST Corporate Registry & Wallet Trust** | Cross-references the counterparty against verified GST organizations (a wallet that is a registered organization member is also treated as verified). | Verified entities receive trusted operational status and are routed to a co-signer on transfer **#3** if they have no endorsement yet. Independent wallets mandate co-signers on transfer **#2**. |
+| **4** | 📈 **Relative Counterparty Volume Surge** | Compares the amount with the recipient's baseline: the higher of the average of its last **8** transfers and its highest endorsed amount (needs at least 1 past transfer). | If the current amount spikes **25x or higher** over that baseline (and at least 200 XLM-equivalent), or **35x or higher** on its own, it forces an automated quarantine (**+45**, floor of about 78.5). |
 
 ### 🛑 Supplementary Guardrails
 
 | Guardrail | What It Checks | Trigger and Effect |
 |:--|:--|:--|
-| 💰 **High-Value Protocol Cap** | Amount normalized to XLM-equivalent (1 USDC = 5.0 XLM, 1 EURC = 5.55 XLM) | Above **5,000 XLM / 1,000 USDC / 900 EURC**: **+45** with a floor of 78, mandating multi-sig approval |
-| 🪜 **Fixed Trust-Laddering Bands** | How many co-signed endorsements and executed transfers the recipient already has with this treasury | Sets the cap or floor of the score for routine transfers. Skipped when an entropy or clustering anomaly fires, or the amount is above 5,000 XLM-equivalent |
+| 💰 **High-Value Protocol Cap** | Amount normalized to XLM-equivalent (1 USDC = 5.0 XLM, 1 EURC = 5.55 XLM) | Above **5,000 XLM / 1,000 USDC / 900 EURC**: **+45** with a floor of about 78, mandating multi-sig approval |
+| 🚧 **Near-Cap Anomaly Gate** | Amount of **4,500 XLM-equivalent or more** while the recipient has no co-signed endorsement history | **+42** with a floor of about 78, because the transfer approaches the single-disbursement ceiling without verified co-signer trust |
+| 🪜 **Fixed Trust-Laddering Bands** | How many co-signed endorsements and executed transfers the recipient already has with this treasury | Sets the cap or floor of the score for routine transfers. Skipped when an entropy, clustering, counterparty-surge or near-cap anomaly fires, or the amount is above 5,000 XLM-equivalent |
 
+> The trust history only counts this treasury's own transfers to the recipient, in the states `executed`, `observing`, `awaiting_approval`, `quarantined` and `pending`. Cancelled and rejected transfers never count toward trust.
 
 ### 🧮 Mathematical Composite Scoring Formula
 
 ```text
 base_ml   = 35 × IsolationForest_anomaly(f1..f7)        # 0 to 35
+var       = 1.85 × log10(max(amount_xlm_eq, 1) + 9)     # amount-based variance
 score     = base_ml
-score     = max(score + penalty_i, floor_i)             # for each triggered guardrail i
-score     = trust-ladder cap or floor                   # routine transfers only
+score     = max(score + penalty_i, floor_i + (var mod m_i))   # for each triggered guardrail i
+score     = trust-ladder cap or floor (+ var)           # routine transfers only
 RiskScore = clamp(score, 0, 100)
 
 challenge if RiskScore >= 75
 ```
+
+| Guardrail | Penalty | Floor | Variance Modulus `m` |
+|:--|:-:|:-:|:-:|
+| High-value cap (above 5,000 XLM-eq) | +45 | 78.0 | 4.5 |
+| Global entropy anomaly | +50 | 79.0 | 5.0 |
+| Frequency clustering | +48 | 77.5 | 4.0 |
+| Counterparty volume surge | +45 | 78.5 | 4.5 |
+| Near-cap gate (4,500 XLM-eq or more) | +42 | 78.0 | 3.5 |
 
 The Isolation Forest scores a normalized **7-dimensional feature vector**:
 
@@ -681,7 +696,7 @@ The model is a 50-tree Isolation Forest (contamination 0.05) seeded on a synthet
 ### 🧾 What the ML Evaluates (summary)
 
 - Transaction frequency, entropy, registered vs unregistered wallet status, destination wallet velocity, counterparty trust, and exposure risk limits.
-- Counterparty trust history, volume surge (>30x baseline), post-cosign frequency clustering, and memo entropy to autonomously quarantine anomalous payouts.
+- Counterparty trust history, volume surge (25x or more over baseline), post-cosign frequency clustering, near-cap exposure without endorsement history, and memo entropy to autonomously quarantine anomalous payouts.
 - Recipient verification (registered or unregistered entity) feeds directly into the ML risk score.
 - Built to prevent fund theft and give treasuries a trustworthy payment system.
 
@@ -813,7 +828,7 @@ The in-app navigation covers: **Overview**, **Ongoing Queue**, **Company History
 | 🤖 **Backend & Autonomous Keepers** | Python 3.11 • FastAPI • Uvicorn • Pydantic Settings • stellar-sdk (Python) • HTTPX • Soroban RPC Event Subscriber • cron-job.org scheduler |
 | 🗄️ **Database & Storage** | Supabase • PostgreSQL • Row Level Security (RLS) |
 | 📨 **Messaging & Automation** | Google Apps Script (REST microservices) • Gmail |
-| 🚢 **CI/CD & Cloud Infrastructure** | GitHub Actions • Vercel Edge Platform • Render Cloud Container Services |
+| 🚢 **CI/CD & Cloud Infrastructure** | Vercel Edge Platform • Render Cloud Container Services |
 
 ### 🗣️ Languages and Where They Are Used
 
