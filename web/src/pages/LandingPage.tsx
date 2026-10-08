@@ -185,7 +185,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({
           </h1>
 
           <p className="text-zinc-400 text-xs sm:text-sm max-w-2xl mx-auto leading-relaxed">
-            Eliminate corporate hot-wallet draining and social engineering attacks. Features instantaneous non-custodial smart contract escrow, dynamic time-lock observation (<span className="text-stellar-yellow font-bold">2h to 12h</span>)[cite: 27], off-chain machine learning telemetry[cite: 27], and automated GST tax invoicing[cite: 27].
+            Eliminate corporate hot-wallet draining and social engineering attacks. Features instantaneous non-custodial smart contract escrow, dynamic time-lock observation (<span className="text-stellar-yellow font-bold">2h to 12h</span>), off-chain machine learning telemetry, and automated GST tax invoicing.
           </p>
 
           {/* ACTION STATION */}
@@ -257,7 +257,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({
                 <Lock className="w-3.5 h-3.5 text-stellar-yellow" />
                 <span>Non-Custodial</span>
               </div>
-              <div className="text-[10px] text-zinc-500 mt-1">Smart contract SAC lock[cite: 27]</div>
+              <div className="text-[10px] text-zinc-500 mt-1">Smart contract SAC lock</div>
             </div>
 
             <div className="p-4 bg-[#0A101C]/90 border border-[#1E293B] rounded-sm text-left relative overflow-hidden group hover:border-stellar-yellow/50 transition-all animate-card-float-alt shadow-lg">
@@ -266,7 +266,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({
                 <Clock className="w-3.5 h-3.5" />
                 <span>2h to 12 Hours</span>
               </div>
-              <div className="text-[10px] text-zinc-500 mt-1">Configurable timelock[cite: 27]</div>
+              <div className="text-[10px] text-zinc-500 mt-1">Configurable timelock</div>
             </div>
 
             <div className="p-4 bg-[#0A101C]/90 border border-[#1E293B] rounded-sm text-left relative overflow-hidden group hover:border-stellar-yellow/50 transition-all animate-card-float shadow-lg">
@@ -275,7 +275,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({
                 <BrainCircuit className="w-3.5 h-3.5" />
                 <span>&ge; 75/100 Quarantine</span>
               </div>
-              <div className="text-[10px] text-zinc-500 mt-1">5 Telemetry axes evaluated[cite: 27]</div>
+              <div className="text-[10px] text-zinc-500 mt-1">5 Telemetry axes evaluated</div>
             </div>
 
             <div className="p-4 bg-[#0A101C]/90 border border-[#1E293B] rounded-sm text-left relative overflow-hidden group hover:border-stellar-yellow/50 transition-all animate-card-float-alt shadow-lg">
@@ -284,7 +284,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({
                 <Terminal className="w-3.5 h-3.5 text-emerald-400" />
                 <span>Autonomous Crank</span>
               </div>
-              <div className="text-[10px] text-zinc-500 mt-1">Zero user secondary gas[cite: 27]</div>
+              <div className="text-[10px] text-zinc-500 mt-1">Zero user secondary gas</div>
             </div>
           </div>
         </div>
@@ -300,11 +300,11 @@ export const LandingPage: React.FC<LandingPageProps> = ({
                 <span>Live Consensus Telemetry Matrix</span>
               </div>
               <h2 className="text-2xl sm:text-3xl font-bold font-sans text-white tracking-tight">
-                Simulate Autonomous Protocol Gating &amp; Multi-Sig Rules[cite: 27]
+                Simulate Autonomous Protocol Gating &amp; Multi-Sig Rules
               </h2>
             </div>
             <div className="text-zinc-400 text-[11px] max-w-sm">
-              Adjust disbursement parameters to observe how Soroban dynamically transitions from routine FastPath into multi-sig review and quarantine[cite: 27].
+              Adjust disbursement parameters to observe how Soroban dynamically transitions from routine FastPath into multi-sig review and quarantine.
             </div>
           </div>
 
@@ -388,7 +388,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({
             <div className="lg:col-span-6 bg-[#060910] border border-[#1E293B] p-6 rounded-sm flex flex-col justify-between space-y-5 animate-card-float shadow-2xl">
               <div>
                 <div className="flex items-center justify-between border-b border-[#1A2538] pb-3">
-                  <span className="text-zinc-400 uppercase text-[10px] font-bold">Simulated On-Chain Execution State[cite: 27]</span>
+                  <span className="text-zinc-400 uppercase text-[10px] font-bold">Simulated On-Chain Execution State</span>
                   <span className={`px-2.5 py-1 text-[10px] font-extrabold uppercase rounded-sm border ${
                     simulationEngine.isQuarantined 
                       ? 'bg-red-950/90 border-red-500 text-red-300 animate-pulse'
@@ -407,11 +407,11 @@ export const LandingPage: React.FC<LandingPageProps> = ({
                 <div className="space-y-3 pt-3 text-[11px]">
                   <div className="flex justify-between py-1.5 border-b border-[#131B2B]">
                     <span className="text-zinc-500">Immediate Escrow Lock:</span>
-                    <span className="text-white font-bold font-mono">100% Locked on Intent Creation[cite: 27]</span>
+                    <span className="text-white font-bold font-mono">100% Locked on Intent Creation</span>
                   </div>
                   <div className="flex justify-between py-1.5 border-b border-[#131B2B]">
                     <span className="text-zinc-500">Configured Observation Timelock:</span>
-                    <span className="text-stellar-yellow font-bold font-mono">2 Hours to 12 Hours Window[cite: 27]</span>
+                    <span className="text-stellar-yellow font-bold font-mono">2 Hours to 12 Hours Window</span>
                   </div>
                   <div className="flex justify-between py-1.5 border-b border-[#131B2B]">
                     <span className="text-zinc-500">Mandatory Signer Quorum:</span>
@@ -419,11 +419,11 @@ export const LandingPage: React.FC<LandingPageProps> = ({
                   </div>
                   <div className="flex justify-between py-1.5 border-b border-[#131B2B]">
                     <span className="text-zinc-500">Settlement Dispatch Mechanism:</span>
-                    <span className="text-emerald-400 font-bold font-mono">Autonomous Keeper Crank[cite: 27]</span>
+                    <span className="text-emerald-400 font-bold font-mono">Autonomous Keeper Crank</span>
                   </div>
                   <div className="flex justify-between py-1.5">
                     <span className="text-zinc-500">If Unapproved / Cancelled:</span>
-                    <span className="text-emerald-400 font-bold font-mono">Auto-Refunded to Treasury[cite: 27]</span>
+                    <span className="text-emerald-400 font-bold font-mono">Auto-Refunded to Treasury</span>
                   </div>
                 </div>
               </div>
@@ -450,13 +450,13 @@ export const LandingPage: React.FC<LandingPageProps> = ({
         <div className="max-w-6xl mx-auto px-4 lg:px-8 space-y-12">
           <div className="text-center max-w-3xl mx-auto space-y-2">
             <span className="text-stellar-yellow uppercase tracking-widest text-[10px] font-bold">
-              Autonomous Defense Architecture[cite: 27]
+              Autonomous Defense Architecture
             </span>
             <h2 className="text-2xl sm:text-4xl font-black font-sans text-white tracking-tight">
-              Enterprise-Grade Protection for High-Value Treasuries[cite: 27]
+              Enterprise-Grade Protection for High-Value Treasuries
             </h2>
             <p className="text-zinc-400 text-xs leading-relaxed">
-              Engineered natively on the Stellar Soroban Rust framework to replace vulnerable hot wallets with continuous cryptographic validation[cite: 27].
+              Engineered natively on the Stellar Soroban Rust framework to replace vulnerable hot wallets with continuous cryptographic validation.
             </p>
           </div>
 
@@ -468,7 +468,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({
               </div>
               <h3 className="font-bold text-white text-sm">Non-Custodial Escrow</h3>
               <p className="text-[11px] text-zinc-400 leading-relaxed">
-                Tokens transfer immediately into contract storage upon intent initialization[cite: 27]. Double-spends and unauthorized treasury drain scenarios are mathematically precluded[cite: 27].
+                Tokens transfer immediately into contract storage upon intent initialization. Double-spends and unauthorized treasury drain scenarios are mathematically precluded.
               </p>
             </div>
 
@@ -479,7 +479,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({
               </div>
               <h3 className="font-bold text-white text-sm">ML Telemetry Sentinel</h3>
               <p className="text-[11px] text-zinc-400 leading-relaxed">
-                Evaluates counterparty trust history, volume surge, post-cosign frequency clustering, and memo entropy to autonomously quarantine anomalous payouts[cite: 27].
+                Evaluates counterparty trust history, volume surge, post-cosign frequency clustering, and memo entropy to autonomously quarantine anomalous payouts.
               </p>
             </div>
 
@@ -490,7 +490,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({
               </div>
               <h3 className="font-bold text-white text-sm">Autonomous Crank Bot</h3>
               <p className="text-[11px] text-zinc-400 leading-relaxed">
-                Zero secondary gas or manual confirmation required[cite: 27]. Once observation timelocks clear and required multi-sig approvals are signed, the keeper bot settles on-chain[cite: 27].
+                Zero secondary gas or manual confirmation required. Once observation timelocks clear and required multi-sig approvals are signed, the keeper bot settles on-chain.
               </p>
             </div>
 
@@ -501,7 +501,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({
               </div>
               <h3 className="font-bold text-white text-sm">Automated PDF Invoicing</h3>
               <p className="text-[11px] text-zinc-400 leading-relaxed">
-                Integrates with Google Apps Script to generate GST-compliant PDF Tax Invoices upon execution, relaying receipts to both the treasurer and the recipient entity[cite: 27].
+                Integrates with Google Apps Script to generate GST-compliant PDF Tax Invoices upon execution, relaying receipts to both the treasurer and the recipient entity.
               </p>
             </div>
           </div>
@@ -572,7 +572,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({
               <img src="/Logo.svg" alt="Logo" className="w-10 h-10 object-contain" />
               <div>
                 <span className="text-white font-bold text-sm tracking-wide">STELLAR SENTINEL</span>
-                <p className="text-zinc-500 text-[10px]">Autonomous Smart Treasury &amp; Risk Defense Protocol[cite: 27]</p>
+                <p className="text-zinc-500 text-[10px]">Autonomous Smart Treasury &amp; Risk Defense Protocol</p>
               </div>
             </div>
 
@@ -615,7 +615,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({
                 Earth Kumar Roy
               </h3>
               <p className="text-zinc-400 text-[11px] max-w-xl leading-relaxed">
-                Specializing in production Web3 smart contract architectures, zero-knowledge verification frameworks, and automated decentralized keeper infrastructure on Stellar Soroban[cite: 27].
+                Specializing in production Web3 smart contract architectures, zero-knowledge verification frameworks, and automated decentralized keeper infrastructure on Stellar Soroban.
               </p>
             </div>
 
