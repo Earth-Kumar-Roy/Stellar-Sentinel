@@ -8,34 +8,43 @@ declare global {
 
 let pyodideInstance: any = null;
 let initPromise: Promise<any> | null = null;
+let isReady = false;
 
-async function getPyodideInstance(): Promise<any> {
-  if (pyodideInstance) return pyodideInstance;
+export function isPyodideReady(): boolean {
+  return isReady;
+}
+
+export async function initPyodideEngine(
+  onProgress?: (stage: string) => void
+): Promise<any> {
+  if (pyodideInstance) {
+    if (onProgress) onProgress('Engine Armed & Ready');
+    return pyodideInstance;
+  }
   if (initPromise) return initPromise;
 
   initPromise = (async () => {
     if (typeof window.loadPyodide !== 'function') {
-      throw new Error('Pyodide script failed to load from CDN.');
+      throw new Error('Pyodide script failed to load from CDN. Verify script tag in index.html.');
     }
 
+    if (onProgress) onProgress('Downloading Pyodide WASM Runtime...');
     const pyodide = await window.loadPyodide({
       indexURL: 'https://cdn.jsdelivr.net/pyodide/v0.26.2/full/',
     });
 
-    // Load pre-compiled binary packages required by pipeline.py
+    if (onProgress) onProgress('Loading scikit-learn, numpy & joblib packages...');
     await pyodide.loadPackage(['numpy', 'scikit-learn', 'joblib']);
 
-    // Fetch the raw Python scripts from public assets
+    if (onProgress) onProgress('Mounting ML pipeline and risk scorer...');
     const [pipelineCode, riskScorerCode] = await Promise.all([
       fetch('/py_agent/pipeline.py').then((res) => res.text()),
       fetch('/py_agent/risk_scorer.py').then((res) => res.text()),
     ]);
 
-    // Create filesystem directories in the virtual WASM environment
     pyodide.FS.mkdirTree('/home/pyodide/ml/models');
     pyodide.FS.mkdirTree('/home/pyodide/engine');
 
-    // Mount Isolation Forest joblib weights if available
     try {
       const modelBuffer = await fetch('/py_agent/models/isolation_forest.joblib').then((res) =>
         res.arrayBuffer()
@@ -50,9 +59,13 @@ async function getPyodideInstance(): Promise<any> {
 
     pyodide.FS.writeFile('/home/pyodide/ml/pipeline.py', pipelineCode);
 
-    // Mock core.supabase client bridge with strict in-memory SQL filtering for .eq() and .neq()
+    if (onProgress) onProgress('Configuring multi-tenant virtual database bridge...');
     pyodide.runPython(`
 import sys
+import warnings
+from sklearn.exceptions import InconsistentVersionWarning
+warnings.filterwarnings("ignore", category=InconsistentVersionWarning)
+
 sys.path.append('/home/pyodide')
 
 class MockTable:
@@ -111,6 +124,8 @@ sys.modules['core'] = MockCore
     pyodide.runPython(riskScorerCode);
 
     pyodideInstance = pyodide;
+    isReady = true;
+    if (onProgress) onProgress('Engine Armed & Ready');
     return pyodide;
   })();
 
@@ -127,7 +142,7 @@ export async function runPythonRiskEvaluation(params: {
   purposeHashHex?: string;
   orgName?: string;
 }) {
-  const pyodide = await getPyodideInstance();
+  const pyodide = await initPyodideEngine();
   const treasurerWallet = params.sender.trim();
   const recipientWallet = params.recipient.trim();
 
@@ -151,7 +166,6 @@ export async function runPythonRiskEvaluation(params: {
       .limit(25),
   ]);
 
-  // Combine and deduplicate safely without TypeScript errors
   const combinedList: Array<Record<string, any>> = [
     ...(txRes.data || []),
     ...(globalRes.data || [])
