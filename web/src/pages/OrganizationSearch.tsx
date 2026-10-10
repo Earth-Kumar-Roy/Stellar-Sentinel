@@ -150,7 +150,7 @@ export const OrganizationSearch: React.FC<OrganizationSearchProps> = ({
             ORGANIZATION DIRECTORY &amp; DISBURSEMENT SEARCH
           </h1>
           <p className="text-stellar-muted text-[11px] mt-1">
-            Search external verified corporate registries and inspect designated vault rosters[cite: 24].
+            Search external verified corporate registries and inspect designated vault rosters.
           </p>
         </div>
 

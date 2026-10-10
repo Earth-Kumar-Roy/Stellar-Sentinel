@@ -108,7 +108,7 @@ export const InvoiceExplorer: React.FC<InvoiceExplorerProps> = ({ currentWallet,
             TREASURY INVOICE & RECEIPT EXPLORER
           </h1>
           <p className="text-stellar-muted text-[11px] mt-1">
-            Audit on-chain settlements, auto-generate tax receipts, and inspect compliance proofs by Intent ID[cite: 5].
+            Audit on-chain settlements, auto-generate tax receipts, and inspect compliance proofs by Intent ID.
           </p>
         </div>
 

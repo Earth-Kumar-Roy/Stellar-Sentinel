@@ -525,7 +525,7 @@ export const OngoingIntents: React.FC<OngoingIntentsProps> = ({
         <div className="bg-[#121620] border border-[#232938] p-12 text-center text-stellar-muted card-polygon">
           <ShieldCheck className="w-8 h-8 text-emerald-400 mx-auto mb-2" />
           <p className="text-white font-bold text-sm mb-1">Queue Empty</p>
-          <p className="text-[11px]">No active disbursements found in observation or awaiting multi-sig consensus for {userOrgName || 'this organization'}[cite: 27].</p>
+          <p className="text-[11px]">No active disbursements found in observation or awaiting multi-sig consensus for {userOrgName || 'this organization'}.</p>
         </div>
       ) : (
         <div className="space-y-4">
