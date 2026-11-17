@@ -79,6 +79,7 @@ Instead of sending money instantly (and irreversibly), every payment is **locked
 | ⚡ | **Backend / Keeper Server** | https://stellar-sentinel.onrender.com/ |
 | 📜 | **Smart Contract ID (Testnet)** | `CDYQLHZ3KBXVJVC5LGGXJTXXBEIA4BGZHLJKZ3JY2FA4FEGURT7YZ3C2` |
 | 🔎 | **Contract Explorer (Stellar Expert)** | https://stellar.expert/explorer/testnet/contract/CDYQLHZ3KBXVJVC5LGGXJTXXBEIA4BGZHLJKZ3JY2FA4FEGURT7YZ3C2 |
+| 🎥 | **Demo Video** | https://youtu.be/w__D9ubt6Qs |
 
 ---
 
